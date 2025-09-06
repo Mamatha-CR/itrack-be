@@ -12,7 +12,9 @@ export function rbac(screenName, action) {
       // Find screen by name (exact match)
       const screen = await Screen.findOne({ where: { name: screenName } });
       if (!screen) {
-        return res.status(403).json({ message: `Forbidden: screen '${screenName}' not found` });
+        return res
+          .status(403)
+          .json({ message: `Permission denied: '${screenName}' is not available. Contact an administrator.` });
       }
 
       // Resolve PK of Screen safely
@@ -28,14 +30,20 @@ export function rbac(screenName, action) {
         where: { role_id: roleId, screen_id: screenId },
       });
       if (!perm) {
-        return res.status(403).json({ message: `Forbidden: no permission for '${screenName}'` });
+        return res
+          .status(403)
+          .json({ message: `Permission denied: You do not have access to '${screenName}'. Contact an administrator.` });
       }
 
       const fieldMap = { view: "can_view", add: "can_add", edit: "can_edit", delete: "can_delete" };
+      const actionVerbMap = { view: "view", add: "create", edit: "update", delete: "delete" };
       const field = fieldMap[action] || "can_view";
 
       if (!perm[field]) {
-        return res.status(403).json({ message: `Forbidden: lacks ${action} on '${screenName}'` });
+        const verb = actionVerbMap[action] || action || "perform this action on";
+        return res
+          .status(403)
+          .json({ message: `Permission denied: You are not allowed to ${verb} '${screenName}'. Contact an administrator if you need this access.` });
       }
 
       return next();

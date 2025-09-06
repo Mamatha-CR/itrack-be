@@ -14,6 +14,7 @@ import {
   RoleScreenPermission,
 } from "../models/index.js";
 import { rbac } from "../middleware/rbac.js";
+import { Sequelize } from "sequelize";
 import { buildCrudRoutes } from "../utils/crudFactory.js";
 import { Op } from "sequelize";
 
@@ -38,6 +39,55 @@ masterRouter.use(
 );
 
 /* ---------- Job Statuses (under Manage Job) ---------- */
+// Ordered list endpoint (ASC by job_status_order)
+masterRouter.get(
+  "/job-statuses/ordered",
+  rbac("Manage Job", "view"),
+  async (req, res, next) => {
+    try {
+      const rows = await JobStatus.findAll({ where: { status: true } });
+      const normalize = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+      const desiredOrder = {
+        notstarted: 1,
+        assignedtech: 2,
+        enroute: 3,
+        onsite: 4,
+        onhold: 5,
+        onresume: 6,
+        completed: 7,
+        cancelled: 8,
+        unresolved: 9,
+        // reject is outside main flow
+        rejected: 99,
+      };
+
+      // Self-heal missing orders
+      for (const r of rows) {
+        const key = normalize(r.job_status_title);
+        const ord = desiredOrder[key];
+        if (ord && r.job_status_order !== ord) {
+          await r.update({ job_status_order: ord });
+        }
+      }
+
+      const sorted = rows
+        .map((r) => ({ row: r, key: normalize(r.job_status_title) }))
+        .sort((a, b) => (a.row.job_status_order || desiredOrder[a.key] || 999) - (b.row.job_status_order || desiredOrder[b.key] || 999))
+        .map(({ row, key }) => ({
+          job_status_id: row.job_status_id,
+          job_status_title: row.job_status_title,
+          job_status_color_code: row.job_status_color_code,
+          job_status_order: row.job_status_order ?? desiredOrder[key] ?? null,
+          order: row.job_status_order ?? desiredOrder[key] ?? null,
+          key,
+        }));
+
+      return res.json({ data: sorted });
+    } catch (e) {
+      return next(e);
+    }
+  }
+);
 masterRouter.use(
   "/job-statuses",
   buildCrudRoutes({

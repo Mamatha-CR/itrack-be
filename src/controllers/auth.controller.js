@@ -1,13 +1,58 @@
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import dotenv from "dotenv";
+import { Op } from "sequelize";
 import { User, Vendor, Company, Role, RoleScreenPermission, Screen } from "../models/index.js";
+import { verifyIdToken, initFirebase, isFirebaseReady } from "../utils/firebase.js";
 dotenv.config();
 
 const stripPasswords = (obj) => {
   const data = obj.toJSON();
   for (const k of Object.keys(data)) if (k.toLowerCase().includes("password")) delete data[k];
   return data;
+};
+
+const buildAuthResponse = async (principal, type) => {
+  let role_id = principal.role_id;
+  let company_id = principal.company_id || null;
+  if (type === "company") {
+    const r = await Role.findOne({ where: { role_slug: "company_admin" } });
+    role_id = r?.role_id || role_id;
+    company_id = principal.company_id || null;
+  }
+
+  const role = await Role.findOne({ where: { role_id } });
+  const perms = await RoleScreenPermission.findAll({ where: { role_id }, include: [Screen] });
+  const permissions = perms.map((p) => ({
+    screen: p.Screen?.name,
+    view: p.can_view,
+    add: p.can_add,
+    edit: p.can_edit,
+    delete: p.can_delete,
+  }));
+
+  const token = jwt.sign(
+    {
+      sub: principal.user_id || principal.vendor_id || principal.company_id,
+      type,
+      role_id,
+      role_slug: role?.role_slug,
+      company_id,
+    },
+    process.env.JWT_SECRET,
+    { expiresIn: process.env.JWT_EXPIRES_IN || "7d" }
+  );
+
+  return {
+    token,
+    user: {
+      type,
+      role: { id: role?.role_id, name: role?.role_name, slug: role?.role_slug },
+      company_id,
+      profile: stripPasswords(principal),
+    },
+    permissions,
+  };
 };
 
 export async function login(req, res, next) {
@@ -39,46 +84,97 @@ export async function login(req, res, next) {
     }
     if (!principal) return res.status(401).json({ message: "Invalid credentials" });
 
-    let role_id = principal.role_id;
-    let company_id = principal.company_id || null;
-    if (type === "company") {
-      const r = await Role.findOne({ where: { role_slug: "company_admin" } });
-      role_id = r?.role_id || role_id;
-      company_id = principal.company_id || null;
+    const response = await buildAuthResponse(principal, type);
+    res.json(response);
+  } catch (e) {
+    next(e);
+  }
+}
+
+export async function mobileLogin(req, res, next) {
+  try {
+    const body = req.body || {};
+    // Accept multiple common locations for the Firebase ID token
+    const headerAuth = req.headers.authorization || "";
+    const bearer = headerAuth.startsWith("Bearer ") ? headerAuth.slice(7) : null;
+    const headerX = req.headers["x-firebase-token"] || req.headers["x-id-token"];
+    const queryToken = req.query?.idToken || req.query?.token || req.query?.id_token;
+    const idToken = body.idToken || body.firebaseToken || body.token || body.id_token;
+    const tokenToVerify = idToken || bearer || headerX || queryToken;
+    if (!tokenToVerify) {
+      return res.status(400).json({ message: "idToken (Firebase) is required" });
     }
 
-    const role = await Role.findOne({ where: { role_id } });
-    const perms = await RoleScreenPermission.findAll({ where: { role_id }, include: [Screen] });
-    const permissions = perms.map((p) => ({
-      screen: p.Screen?.name,
-      view: p.can_view,
-      add: p.can_add,
-      edit: p.can_edit,
-      delete: p.can_delete,
-    }));
+    // Ensure Firebase is initialized
+    initFirebase();
+    if (!isFirebaseReady())
+      return res.status(500).json({ message: "Firebase not configured on server" });
 
-    const token = jwt.sign(
-      {
-        sub: principal.user_id || principal.vendor_id || principal.company_id,
-        type,
-        role_id,
-        role_slug: role?.role_slug,
-        company_id,
-      },
-      process.env.JWT_SECRET,
-      { expiresIn: process.env.JWT_EXPIRES_IN || "7d" }
-    );
+    const decoded = await verifyIdToken(tokenToVerify);
+    const phoneNumber = decoded?.phone_number || ""; // E.164 like +9198...
+    if (!phoneNumber) return res.status(401).json({ message: "Phone number missing in token" });
 
-    res.json({
-      token,
-      user: {
-        type,
-        role: { id: role?.role_id, name: role?.role_name, slug: role?.role_slug },
-        company_id,
-        profile: stripPasswords(principal),
-      },
-      permissions,
+    const digits = String(phoneNumber).replace(/\D+/g, "");
+    const last10 = digits.length > 10 ? digits.slice(-10) : digits;
+
+    let principal = null;
+    let type = null;
+
+    // Try User by phone
+    principal = await User.findOne({
+      where: { phone: { [Op.or]: [digits, last10] } },
     });
+    if (principal) type = "user";
+
+    // Then Vendor by phone (may be non-unique across companies; pick first)
+    if (!principal) {
+      principal = await Vendor.findOne({
+        where: { phone: { [Op.or]: [digits, last10] } },
+      });
+      if (principal) type = "vendor";
+    }
+
+    // Then Company by phone
+    if (!principal) {
+      principal = await Company.findOne({
+        where: { phone: { [Op.or]: [digits, last10] } },
+      });
+      if (principal) type = "company";
+    }
+
+    if (!principal) return res.status(401).json({ message: "No account mapped to this phone" });
+
+    const response = await buildAuthResponse(principal, type);
+    res.json(response);
+  } catch (e) {
+    next(e);
+  }
+}
+
+export async function firebaseStatus(req, res) {
+  initFirebase();
+  res.json({ ready: isFirebaseReady() });
+}
+
+// Precheck endpoint: verifies that the phone exists in the system.
+// Firebase OTP SMS should be initiated on the client using Firebase SDK.
+export async function requestOtp(req, res, next) {
+  try {
+    const { phone } = req.body || {};
+    if (!phone) return res.status(400).json({ message: "phone required" });
+
+    const digits = String(phone).replace(/\D+/g, "");
+    const last10 = digits.length > 10 ? digits.slice(-10) : digits;
+
+    let principal = await User.findOne({ where: { phone: { [Op.or]: [digits, last10] } } });
+    if (!principal)
+      principal = await Vendor.findOne({ where: { phone: { [Op.or]: [digits, last10] } } });
+    if (!principal)
+      principal = await Company.findOne({ where: { phone: { [Op.or]: [digits, last10] } } });
+
+    if (!principal) return res.status(404).json({ message: "No account mapped to this phone" });
+
+    return res.json({ ok: true, message: "Phone recognized. Use Firebase client to send OTP." });
   } catch (e) {
     next(e);
   }

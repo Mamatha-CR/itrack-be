@@ -293,31 +293,39 @@ async function seedMasters() {
 
   // Job Statuses (optional colors; tweak as you like)
   const jobStatuses = [
-    { title: "Not Started", color: "#6B7280" },
-    { title: "OnHold", color: "#F59E0B" },
-    { title: "Assign Tech", color: "#3B82F6" },
-    { title: "Rejected", color: "#EF4444" },
-    { title: "Completed", color: "#10B981" },
-    { title: "Cancelled", color: "#9CA3AF" },
-    { title: "EnRoute", color: "#6366F1" },
-    { title: "OnSite", color: "#0EA5E9" },
-    { title: "UnResolved", color: "#F97316" },
+    { title: "Not Started", color: "#2F80ED", order: 1 },
+    { title: "Assigned Tech", color: "#47A63A", order: 2 },
+    { title: "EnRoute", color: "#6366F1", order: 3 },
+    { title: "OnSite", color: "#0EA5E9", order: 4 },
+    { title: "OnHold", color: "#2F80ED", order: 5 },
+    { title: "OnResume", color: "#2F80ED", order: 6 },
+    { title: "Completed", color: "#47A63A", order: 7 },
+    { title: "Cancelled", color: "#ADADAD", order: 8 },
+    { title: "UnResolved", color: "#F97316", order: 9 },
+    // Keep Rejected for decline action (not in main order)
+    { title: "Rejected", color: "#FF7878", order: 99 },
   ];
-
+  // Normalize existing statuses and update or create accordingly
+  const normalize = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+  const existing = await JobStatus.findAll();
+  const map = Object.fromEntries(existing.map((r) => [normalize(r.job_status_title), r]));
   for (const js of jobStatuses) {
-    const [row] = await JobStatus.findOrCreate({
-      where: { job_status_title: js.title },
-      defaults: {
+    const key = normalize(js.title);
+    const row = map[key];
+    if (row) {
+      const updates = {};
+      if (!row.status) updates.status = true;
+      if (row.job_status_color_code !== js.color) updates.job_status_color_code = js.color;
+      if (row.job_status_order !== js.order) updates.job_status_order = js.order;
+      if (Object.keys(updates).length) await row.update(updates);
+    } else {
+      await JobStatus.create({
         job_status_title: js.title,
         status: true,
         job_status_color_code: js.color,
-      },
-    });
-    // keep it enabled and update color if changed
-    const updates = {};
-    if (!row.status) updates.status = true;
-    if (row.job_status_color_code !== js.color) updates.job_status_color_code = js.color;
-    if (Object.keys(updates).length) await row.update(updates);
+        job_status_order: js.order,
+      });
+    }
   }
 }
 

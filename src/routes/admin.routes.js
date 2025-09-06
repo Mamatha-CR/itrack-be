@@ -2,7 +2,7 @@
 import express from "express";
 import { Op } from "sequelize";
 import { buildCrudRoutes } from "../utils/crudFactory.js";
-import { Company, Vendor, User, Client, Role } from "../models/index.js";
+import { Company, Vendor, User, Client, Role, Shift, Region } from "../models/index.js";
 
 export const adminRouter = express.Router();
 
@@ -62,7 +62,24 @@ adminRouter.use(
         err.status = 400;
         throw err;
       }
+      // Verify company exists
+      const company = await Company.findOne({ where: { company_id: companyId } });
+      if (!company) {
+        const err = new Error("company_id does not exist");
+        err.status = 400;
+        throw err;
+      }
       body.company_id = companyId;
+
+      // Optional: validate role_id if provided
+      if (body.role_id) {
+        const role = await Role.findOne({ where: { role_id: body.role_id } });
+        if (!role) {
+          const err = new Error("role_id does not exist");
+          err.status = 400;
+          throw err;
+        }
+      }
     },
     preUpdate: async (_req, body) => {
       if (body.company_id) delete body.company_id; // never move tenant
@@ -109,6 +126,13 @@ adminRouter.use(
         err.status = 400;
         throw err;
       }
+      // Verify company exists
+      const company = await Company.findOne({ where: { company_id: companyId } });
+      if (!company) {
+        const err = new Error("company_id does not exist");
+        err.status = 400;
+        throw err;
+      }
       body.company_id = companyId;
 
       if (!body.role_id) {
@@ -118,7 +142,7 @@ adminRouter.use(
       }
       const role = await Role.findOne({ where: { role_id: body.role_id } });
       if (!role) {
-        const err = new Error("Invalid role_id");
+        const err = new Error("role_id does not exist");
         err.status = 400;
         throw err;
       }
@@ -134,7 +158,67 @@ adminRouter.use(
           where: { vendor_id: body.vendor_id, company_id: companyId },
         });
         if (!vendor) {
-          const err = new Error("vendor_id must belong to the same company");
+          const err = new Error("vendor_id does not exist or does not belong to the same company");
+          err.status = 400;
+          throw err;
+        }
+      }
+
+      // If role is technician, supervisor is mandatory and must be a supervisor in same company
+      if (slug === "technician") {
+        if (!body.supervisor_id) {
+          const err = new Error("supervisor_id is required for technician");
+          err.status = 400;
+          throw err;
+        }
+        const supervisor = await User.findOne({ where: { user_id: body.supervisor_id, company_id: companyId } });
+        if (!supervisor) {
+          const err = new Error("supervisor_id does not exist or is not in the same company");
+          err.status = 400;
+          throw err;
+        }
+        if (supervisor.role_id) {
+          const sRole = await Role.findOne({ where: { role_id: supervisor.role_id } });
+          if (!sRole || String(sRole.role_slug || "").toLowerCase() !== "supervisor") {
+            const err = new Error("supervisor_id must belong to a user with supervisor role");
+            err.status = 400;
+            throw err;
+          }
+        }
+      }
+
+      // Optional: validate shift_id
+      if (body.shift_id) {
+        const shift = await Shift.findOne({ where: { shift_id: body.shift_id } });
+        if (!shift) {
+          const err = new Error("shift_id does not exist");
+          err.status = 400;
+          throw err;
+        }
+      }
+      // Optional: validate supervisor_id (must be in same company)
+      if (body.supervisor_id) {
+        const supervisor = await User.findOne({ where: { user_id: body.supervisor_id, company_id: companyId } });
+        if (!supervisor) {
+          const err = new Error("supervisor_id does not exist or is not in the same company");
+          err.status = 400;
+          throw err;
+        }
+      }
+      // Optional: validate region_id
+      if (body.region_id) {
+        const region = await Region.findOne({ where: { region_id: body.region_id } });
+        if (!region) {
+          const err = new Error("region_id does not exist");
+          err.status = 400;
+          throw err;
+        }
+      }
+      // Optional: validate region_ids array
+      if (Array.isArray(body.region_ids) && body.region_ids.length) {
+        const regions = await Region.findAll({ where: { region_id: { [Op.in]: body.region_ids } } });
+        if (regions.length !== body.region_ids.length) {
+          const err = new Error("One or more region_ids do not exist");
           err.status = 400;
           throw err;
         }
@@ -166,6 +250,28 @@ adminRouter.use(
             const err = new Error("vendor_id must belong to the same company");
             err.status = 400;
             throw err;
+          }
+          if (slug === "technician") {
+            const supervisorId = body.supervisor_id ?? row.supervisor_id;
+            if (!supervisorId) {
+              const err = new Error("supervisor_id is required for technician");
+              err.status = 400;
+              throw err;
+            }
+            const supervisor = await User.findOne({ where: { user_id: supervisorId, company_id: row.company_id } });
+            if (!supervisor) {
+              const err = new Error("supervisor_id does not exist or is not in the same company");
+              err.status = 400;
+              throw err;
+            }
+            if (supervisor.role_id) {
+              const sRole = await Role.findOne({ where: { role_id: supervisor.role_id } });
+              if (!sRole || String(sRole.role_slug || "").toLowerCase() !== "supervisor") {
+                const err = new Error("supervisor_id must belong to a user with supervisor role");
+                err.status = 400;
+                throw err;
+              }
+            }
           }
         }
       }

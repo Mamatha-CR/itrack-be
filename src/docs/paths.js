@@ -1334,8 +1334,65 @@
  *       required: true
  *       content:
  *         application/json:
- *           schema: { type: object }
- *     responses: { 201: { description: Created } }
+ *           schema:
+ *             type: object
+ *             required: [name, email, phone, password]
+ *             properties:
+ *               logo: { type: string, example: "https://cdn.example.com/logo.png" }
+ *               name: { type: string, example: "Acme Corp" }
+ *               gst: { type: string, example: "22AAAAA0000A1Z5" }
+ *               email: { type: string, format: email, example: "admin@acme.com" }
+ *               phone: { type: string, example: "9876543210" }
+ *               password: { type: string, example: "StrongP@ssw0rd" }
+ *               address_1: { type: string, example: "123 Main St" }
+ *               country_id: { type: integer, example: 91 }
+ *               state_id: { type: string, format: uuid, example: "11111111-2222-3333-4444-555555555555" }
+ *               city: { type: string, example: "Mumbai" }
+ *               postal_code: { type: string, example: "400001" }
+ *               lat: { type: number, format: float, example: 19.076 }
+ *               lng: { type: number, format: float, example: 72.8777 }
+ *               proof: { type: string, example: "GST-CERT-123" }
+ *               subscription_id: { type: string, format: uuid, example: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" }
+ *               no_of_users: { type: integer, example: 10 }
+ *               subscription_startDate: { type: string, format: date, example: "2025-01-01" }
+ *               subscription_endDate: { type: string, format: date, example: "2025-12-31" }
+ *               subscription_amountPerUser: { type: number, format: float, example: 12.5 }
+ *               remarks: { type: string, example: "Priority onboarding" }
+ *               theme_color: { type: string, example: "#0044cc" }
+ *               status: { type: boolean, example: true }
+ *     responses:
+ *       201:
+ *         description: Created
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 company_id: { type: string, format: uuid }
+ *                 logo: { type: string }
+ *                 name: { type: string }
+ *                 gst: { type: string }
+ *                 email: { type: string }
+ *                 phone: { type: string }
+ *                 address_1: { type: string }
+ *                 country_id: { type: integer }
+ *                 state_id: { type: string, format: uuid }
+ *                 city: { type: string }
+ *                 postal_code: { type: string }
+ *                 lat: { type: number, format: float }
+ *                 lng: { type: number, format: float }
+ *                 proof: { type: string }
+ *                 subscription_id: { type: string, format: uuid }
+ *                 no_of_users: { type: integer }
+ *                 subscription_startDate: { type: string, format: date-time }
+ *                 subscription_endDate: { type: string, format: date-time }
+ *                 subscription_amountPerUser: { type: number, format: float }
+ *                 remarks: { type: string }
+ *                 theme_color: { type: string }
+ *                 status: { type: boolean }
+ *       400: { description: Validation error }
+ *       403: { description: Permission denied }
+ *       409: { description: Conflict (duplicate email/phone) }
  * /admin/companies/{id}:
  *   get:
  *     tags: [Administration]
@@ -1353,8 +1410,65 @@
  *       required: true
  *       content:
  *         application/json:
- *           schema: { type: object }
- *     responses: { 200: { description: OK } }
+ *           schema:
+ *             type: object
+ *             properties:
+ *               logo: { type: string }
+ *               name: { type: string }
+ *               gst: { type: string }
+ *               email: { type: string, format: email }
+ *               phone: { type: string }
+ *               password: { type: string, description: "If set, will be hashed" }
+ *               address_1: { type: string }
+ *               country_id: { type: integer }
+ *               state_id: { type: string, format: uuid }
+ *               city: { type: string }
+ *               postal_code: { type: string }
+ *               lat: { type: number, format: float }
+ *               lng: { type: number, format: float }
+ *               proof: { type: string }
+ *               subscription_id: { type: string, format: uuid }
+ *               no_of_users: { type: integer }
+ *               subscription_startDate: { type: string, format: date }
+ *               subscription_endDate: { type: string, format: date }
+ *               subscription_amountPerUser: { type: number, format: float }
+ *               remarks: { type: string }
+ *               theme_color: { type: string }
+ *               status: { type: boolean }
+ *     responses:
+ *       200:
+ *         description: OK
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 company_id: { type: string, format: uuid }
+ *                 logo: { type: string }
+ *                 name: { type: string }
+ *                 gst: { type: string }
+ *                 email: { type: string }
+ *                 phone: { type: string }
+ *                 address_1: { type: string }
+ *                 country_id: { type: integer }
+ *                 state_id: { type: string, format: uuid }
+ *                 city: { type: string }
+ *                 postal_code: { type: string }
+ *                 lat: { type: number, format: float }
+ *                 lng: { type: number, format: float }
+ *                 proof: { type: string }
+ *                 subscription_id: { type: string, format: uuid }
+ *                 no_of_users: { type: integer }
+ *                 subscription_startDate: { type: string, format: date-time }
+ *                 subscription_endDate: { type: string, format: date-time }
+ *                 subscription_amountPerUser: { type: number, format: float }
+ *                 remarks: { type: string }
+ *                 theme_color: { type: string }
+ *                 status: { type: boolean }
+ *       400: { description: Validation error }
+ *       403: { description: Permission denied }
+ *       404: { description: Not found }
+ *       409: { description: Conflict (duplicate email/phone) }
  *   delete:
  *     tags: [Administration]
  *     summary: Delete company
@@ -1394,8 +1508,48 @@
  *       required: true
  *       content:
  *         application/json:
- *           schema: { type: object }
- *     responses: { 201: { description: Created } }
+ *           schema:
+ *             type: object
+ *             required: [vendor_name, email, phone, password]
+ *             properties:
+ *               company_id:
+ *                 type: string
+ *                 format: uuid
+ *                 description: "Required for super_admin; ignored for org users"
+ *               vendor_name: { type: string, example: "Ram Kumar" }
+ *               photo: { type: string, example: "https://cdn.example.com/p/ram.jpg" }
+ *               email: { type: string, format: email, example: "ram.kumar@example.com" }
+ *               phone: { type: string, example: "9876543210" }
+ *               password: { type: string, example: "StrongP@ssw0rd" }
+ *               country_id: { type: integer, example: 91 }
+ *               state_id: { type: string, format: uuid, example: "c8bb5a9c-02b0-4f91-8a41-2f5c1c0f9abc" }
+ *               region: { type: string, example: "West" }
+ *               region_id: { type: string, format: uuid, example: "7c2f5b6e-9a12-4d34-8f54-1a2b3c4d5e6f" }
+ *               postal_code: { type: string, example: "400001" }
+ *               role_id: { type: string, format: uuid }
+ *     responses:
+ *       201:
+ *         description: Created
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 vendor_id: { type: string, format: uuid }
+ *                 company_id: { type: string, format: uuid }
+ *                 vendor_name: { type: string }
+ *                 photo: { type: string }
+ *                 email: { type: string }
+ *                 phone: { type: string }
+ *                 country_id: { type: integer }
+ *                 state_id: { type: string, format: uuid }
+ *                 region: { type: string }
+ *                 region_id: { type: string, format: uuid }
+ *                 postal_code: { type: string }
+ *                 role_id: { type: string, format: uuid }
+ *       400: { description: Validation/tenant error }
+ *       403: { description: Permission denied }
+ *       409: { description: Conflict (duplicate email/phone per company) }
  * /admin/vendors/{id}:
  *   get:
  *     tags: [Administration]
@@ -1412,8 +1566,44 @@
  *       required: true
  *       content:
  *         application/json:
- *           schema: { type: object }
- *     responses: { 200: { description: OK } }
+ *           schema:
+ *             type: object
+ *             properties:
+ *               vendor_name: { type: string }
+ *               photo: { type: string }
+ *               email: { type: string, format: email }
+ *               phone: { type: string }
+ *               password: { type: string, description: "If set, will be hashed" }
+ *               country_id: { type: integer }
+ *               state_id: { type: string, format: uuid }
+ *               region: { type: string }
+ *               region_id: { type: string, format: uuid }
+ *               postal_code: { type: string }
+ *               role_id: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: OK
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 vendor_id: { type: string, format: uuid }
+ *                 company_id: { type: string, format: uuid }
+ *                 vendor_name: { type: string }
+ *                 photo: { type: string }
+ *                 email: { type: string }
+ *                 phone: { type: string }
+ *                 country_id: { type: integer }
+ *                 state_id: { type: string, format: uuid }
+ *                 region: { type: string }
+ *                 region_id: { type: string, format: uuid }
+ *                 postal_code: { type: string }
+ *                 role_id: { type: string, format: uuid }
+ *       400: { description: Validation/tenant error }
+ *       403: { description: Permission denied }
+ *       404: { description: Not found }
+ *       409: { description: Conflict (duplicate email/phone per company) }
  *   delete:
  *     tags: [Administration]
  *     summary: Delete vendor
@@ -1452,13 +1642,68 @@
  *     description: |
  *       Org-scoped. `company_id` is required (auto-filled for non-super admin).
  *       If role is **technician** or **supervisor**, `vendor_id` is required and must belong to the same company.
+ *       If role is **technician**, `supervisor_id` is also required and must belong to the same company (with supervisor role).
  *     security: [ { bearerAuth: [] } ]
  *     requestBody:
  *       required: true
  *       content:
  *         application/json:
- *           schema: { type: object }
- *     responses: { 201: { description: Created } }
+ *           schema:
+ *             type: object
+ *             required: [name, email, phone, password, role_id]
+ *             properties:
+ *               company_id:
+ *                 type: string
+ *                 format: uuid
+ *                 description: "Required for super_admin; ignored for org users"
+ *               role_id: { type: string, format: uuid, description: "Must be 'supervisor' or 'technician' role" }
+ *               vendor_id: { type: string, format: uuid, description: "Required when role is supervisor/technician" }
+ *               name: { type: string, example: "Asha Singh" }
+ *               email: { type: string, format: email, example: "asha.singh@example.com" }
+ *               phone: { type: string, example: "9876543210" }
+ *               password: { type: string, example: "StrongP@ssw0rd" }
+ *               photo: { type: string }
+ *               emergency_contact: { type: string }
+ *               address_1: { type: string }
+ *               country_id: { type: integer }
+ *               state_id: { type: string, format: uuid }
+ *               city: { type: string }
+ *               postal_code: { type: string }
+ *               region_ids: { type: array, items: { type: string, format: uuid } }
+ *               supervisor_id: { type: string, format: uuid }
+ *               region_id: { type: string, format: uuid }
+ *               shift_id: { type: string, format: uuid }
+ *               proof: { type: string }
+ *     responses:
+ *       201:
+ *         description: Created
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 user_id: { type: string, format: uuid }
+ *                 company_id: { type: string, format: uuid }
+ *                 role_id: { type: string, format: uuid }
+ *                 vendor_id: { type: string, format: uuid }
+ *                 name: { type: string }
+ *                 email: { type: string }
+ *                 phone: { type: string }
+ *                 photo: { type: string }
+ *                 emergency_contact: { type: string }
+ *                 address_1: { type: string }
+ *                 country_id: { type: integer }
+ *                 state_id: { type: string, format: uuid }
+ *                 city: { type: string }
+ *                 postal_code: { type: string }
+ *                 region_ids: { type: array, items: { type: string, format: uuid } }
+ *                 supervisor_id: { type: string, format: uuid }
+ *                 region_id: { type: string, format: uuid }
+ *                 shift_id: { type: string, format: uuid }
+ *                 proof: { type: string }
+ *       400: { description: Validation/tenant error }
+ *       403: { description: Permission denied }
+ *       409: { description: Conflict (duplicate email/phone) }
  * /admin/users/{id}:
  *   get:
  *     tags: [Administration]
@@ -1477,8 +1722,58 @@
  *       required: true
  *       content:
  *         application/json:
- *           schema: { type: object }
- *     responses: { 200: { description: OK } }
+ *           schema:
+ *             type: object
+ *             properties:
+ *               role_id: { type: string, format: uuid }
+ *               vendor_id: { type: string, format: uuid }
+ *               name: { type: string }
+ *               email: { type: string, format: email }
+ *               phone: { type: string }
+ *               password: { type: string, description: "If set, will be hashed" }
+ *               photo: { type: string }
+ *               emergency_contact: { type: string }
+ *               address_1: { type: string }
+ *               country_id: { type: integer }
+ *               state_id: { type: string, format: uuid }
+ *               city: { type: string }
+ *               postal_code: { type: string }
+ *               region_ids: { type: array, items: { type: string, format: uuid } }
+ *               supervisor_id: { type: string, format: uuid }
+ *               region_id: { type: string, format: uuid }
+ *               shift_id: { type: string, format: uuid }
+ *               proof: { type: string }
+ *     responses:
+ *       200:
+ *         description: OK
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 user_id: { type: string, format: uuid }
+ *                 company_id: { type: string, format: uuid }
+ *                 role_id: { type: string, format: uuid }
+ *                 vendor_id: { type: string, format: uuid }
+ *                 name: { type: string }
+ *                 email: { type: string }
+ *                 phone: { type: string }
+ *                 photo: { type: string }
+ *                 emergency_contact: { type: string }
+ *                 address_1: { type: string }
+ *                 country_id: { type: integer }
+ *                 state_id: { type: string, format: uuid }
+ *                 city: { type: string }
+ *                 postal_code: { type: string }
+ *                 region_ids: { type: array, items: { type: string, format: uuid } }
+ *                 supervisor_id: { type: string, format: uuid }
+ *                 region_id: { type: string, format: uuid }
+ *                 shift_id: { type: string, format: uuid }
+ *                 proof: { type: string }
+ *       400: { description: Validation/tenant error }
+ *       403: { description: Permission denied }
+ *       404: { description: Not found }
+ *       409: { description: Conflict (duplicate email/phone) }
  *   delete:
  *     tags: [Administration]
  *     summary: Delete user
@@ -1659,7 +1954,9 @@
  *     summary: Create job
  *     description: >
  *       - Non-super admins are auto-scoped to their company_id.
+ *       - Requires assigning both a technician and a supervisor.
  *       - reference_number is auto-generated if omitted.
+ *       - Accepts estimated duration as days/hours/minutes. Backend also stores total minutes in estimated_duration.
  *       - A JobStatusHistory row is created if job_status_id is provided.
  *     security:
  *       - bearerAuth: []
@@ -1669,6 +1966,7 @@
  *         application/json:
  *           schema:
  *             type: object
+ *             required: [client_id, supervisor_id, technician_id]
  *             properties:
  *               client_id:
  *                 type: string
@@ -1691,14 +1989,30 @@
  *               job_status_id:
  *                 type: string
  *                 format: uuid
+ *               estimated_days:
+ *                 type: integer
+ *                 minimum: 0
+ *                 example: 0
+ *               estimated_hours:
+ *                 type: integer
+ *                 minimum: 0
+ *                 maximum: 23
+ *                 example: 2
+ *               estimated_minutes:
+ *                 type: integer
+ *                 minimum: 0
+ *                 maximum: 59
+ *                 example: 30
+ *               estimated_duration:
+ *                 type: integer
+ *                 description: Total minutes (optional; computed if days/hours/minutes provided)
+ *                 example: 150
  *               scheduledDateAndTime:
  *                 type: string
  *                 format: date-time
  *               reference_number:
  *                 type: string
- *               title:
- *                 type: string
- *               description:
+ *               job_description:
  *                 type: string
  *           examples:
  *             basic:
@@ -1708,9 +2022,12 @@
  *                 jobtype_id: "e7a02d7f-0d2c-4d1b-9b88-a9a5b1f0a1c2"
  *                 now_id: "d3a3f9a1-3b2c-4c5d-8e7f-1a2b3c4d5e6f"
  *                 job_status_id: "f1550a6d-9f7b-49d0-b3a5-1a3d2f4b5c6e"
+ *                 estimated_days: 0
+ *                 estimated_hours: 2
+ *                 estimated_minutes: 30
+ *                 estimated_duration: 150
  *                 scheduledDateAndTime: "2025-08-20T10:30:00.000Z"
- *                 title: "AC not cooling"
- *                 description: "Check filter and gas level"
+ *                 job_description: "AC not cooling — Check filter and gas level"
  *     responses:
  *       201:
  *         description: Created
@@ -1718,7 +2035,7 @@
  *   get:
  *     tags:
  *       - Jobs
- *     summary: Get job (with relations & status history)
+ *     summary: Get job (single object with embedded status_history)
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -1736,25 +2053,25 @@
  *             schema:
  *               type: object
  *               properties:
- *                 job:
- *                   type: object
+ *                 job_id: { type: string, format: uuid }
+ *                 client: { type: object }
+ *                 technician: { type: object, description: Password excluded }
+ *                 supervisor: { type: object, description: Password excluded }
+ *                 work_type: { type: object }
+ *                 job_type: { type: object }
+ *                 nature_of_work: { type: object }
+ *                 job_status: { type: object }
  *                 status_history:
  *                   type: array
  *                   items:
  *                     type: object
  *                     properties:
- *                       id:
- *                         type: string
- *                       job_status_id:
- *                         type: string
- *                         format: uuid
- *                       job_status_title:
- *                         type: string
- *                       is_completed:
- *                         type: boolean
- *                       at:
- *                         type: string
- *                         format: date-time
+ *                       id: { type: string, format: uuid }
+ *                       job_status_id: { type: string, format: uuid }
+ *                       job_status_title: { type: string }
+ *                       job_status_color_code: { type: string }
+ *                       is_completed: { type: boolean }
+ *                       at: { type: string, format: date-time }
  *   put:
  *     tags:
  *       - Jobs

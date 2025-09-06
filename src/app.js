@@ -17,6 +17,8 @@ const app = express();
 
 app.use(cors());
 app.use(express.json({ limit: "2mb" }));
+// Support form-encoded bodies from mobile clients
+app.use(express.urlencoded({ extended: true }));
 app.use(morgan("dev"));
 
 app.use("/api/docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));

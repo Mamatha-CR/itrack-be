@@ -75,16 +75,19 @@ User.belongsTo(Vendor, { foreignKey: "vendor_id" });
 User.belongsTo(Shift, { foreignKey: "shift_id" });
 
 Job.belongsTo(Company, { foreignKey: "company_id" });
-Job.belongsTo(Client, { foreignKey: "client_id" });
-Job.belongsTo(WorkType, { foreignKey: "worktype_id" });
-Job.belongsTo(JobType, { foreignKey: "jobtype_id" });
+Job.belongsTo(Client, { foreignKey: "client_id", as: "client" });
+Job.belongsTo(WorkType, { foreignKey: "worktype_id", as: "work_type" });
+Job.belongsTo(JobType, { foreignKey: "jobtype_id", as: "job_type" });
 Job.belongsTo(User, { as: "supervisor", foreignKey: "supervisor_id" });
 Job.belongsTo(User, { as: "technician", foreignKey: "technician_id" });
-Job.belongsTo(NatureOfWork, { foreignKey: "now_id" });
+Job.belongsTo(NatureOfWork, { foreignKey: "now_id", as: "nature_of_work" });
 Job.belongsTo(JobStatus, { foreignKey: "job_status_id", as: "job_status" });
 
-JobStatusHistory.belongsTo(Job, { foreignKey: "job_id" });
-Job.hasMany(JobStatusHistory, { foreignKey: "job_id" });
+JobStatusHistory.belongsTo(Job, { foreignKey: "job_id", onDelete: "CASCADE" });
+Job.hasMany(JobStatusHistory, { foreignKey: "job_id", onDelete: "CASCADE", hooks: true });
+// Link history entries to their status record for eager loading
+JobStatusHistory.belongsTo(JobStatus, { foreignKey: "job_status_id" });
+JobStatus.hasMany(JobStatusHistory, { foreignKey: "job_status_id" });
 
 RoleScreenPermission.belongsTo(Role, { foreignKey: "role_id" });
 Role.hasMany(RoleScreenPermission, { foreignKey: "role_id" });

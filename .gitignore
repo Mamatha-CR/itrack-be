@@ -10,3 +10,5 @@ yarn-error.log*
 .idea
 .vscode
 *.sqlite
+service-account*.json
+*.credentials.json

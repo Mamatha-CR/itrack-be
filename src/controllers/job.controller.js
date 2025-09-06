@@ -4,7 +4,8 @@ import { rbac } from "../middleware/rbac.js";
 import { parseListQuery } from "../middleware/pagination.js";
 import { applyOrgScope } from "../middleware/orgScope.js";
 import { buildWhere } from "../utils/filters.js";
-import { Op } from "sequelize";
+import { Op, Sequelize } from "sequelize";
+import { sequelize } from "../config/database.js";
 import {
   Job,
   Client,
@@ -14,9 +15,53 @@ import {
   NatureOfWork,
   JobStatus,
   JobStatusHistory,
+  Role,
+  Region,
 } from "../models/index.js";
 
 export const jobRouter = express.Router();
+
+// Table description cache and helpers to avoid undefined-column errors
+let jobTableDesc = null;
+async function getJobTableDesc() {
+  if (jobTableDesc) return jobTableDesc;
+  try {
+    jobTableDesc = await sequelize.getQueryInterface().describeTable("Job");
+  } catch {
+    jobTableDesc = {};
+  }
+  return jobTableDesc;
+}
+async function getJobColumnAvailability() {
+  const desc = await getJobTableDesc();
+  return {
+    estimated_days: !!desc.estimated_days,
+    estimated_hours: !!desc.estimated_hours,
+    estimated_minutes: !!desc.estimated_minutes,
+  };
+}
+async function getJobAttributesList() {
+  const desc = await getJobTableDesc();
+  const keys = Object.keys(desc || {});
+  return keys.length ? keys : undefined; // undefined lets Sequelize default
+}
+
+// Ensure days/hours/minutes are present on a job-like object using estimated_duration
+function ensureGranularDurationFields(obj) {
+  const hasD = Number.isFinite(Number(obj?.estimated_days));
+  const hasH = Number.isFinite(Number(obj?.estimated_hours));
+  const hasM = Number.isFinite(Number(obj?.estimated_minutes));
+  const total = Number(obj?.estimated_duration);
+  if ((!hasD || !hasH || !hasM) && Number.isFinite(total)) {
+    const d = Math.floor(total / (24 * 60));
+    const h = Math.floor((total % (24 * 60)) / 60);
+    const m = Math.floor(total % 60);
+    if (!hasD) obj.estimated_days = d;
+    if (!hasH) obj.estimated_hours = h;
+    if (!hasM) obj.estimated_minutes = m;
+  }
+  return obj;
+}
 
 /**
  * GET /jobs
@@ -49,6 +94,11 @@ jobRouter.get(
 
       const whereBase = buildWhere(req.query, searchFields, exactFields);
 
+      // Additional text filters: client name, assignee name, region name
+      const clientName = String(req.query.client_name || "").trim().toLowerCase();
+      const assigneeName = String(req.query.assignee_name || "").trim().toLowerCase();
+      const regionName = String(req.query.region || "").trim().toLowerCase();
+
       // Date range on scheduledDateAndTime
       if (req.query.from || req.query.to) {
         whereBase.scheduledDateAndTime = {};
@@ -56,7 +106,77 @@ jobRouter.get(
         if (req.query.to) whereBase.scheduledDateAndTime[Op.lte] = new Date(req.query.to);
       }
 
-      const where = { ...whereBase, ...(req.scopeWhere || {}) };
+      const andConds = [];
+      if (clientName) {
+        andConds.push({
+          [Op.or]: [
+            Sequelize.where(Sequelize.fn("LOWER", Sequelize.col("client.firstName")), {
+              [Op.like]: `%${clientName}%`,
+            }),
+            Sequelize.where(Sequelize.fn("LOWER", Sequelize.col("client.lastName")), {
+              [Op.like]: `%${clientName}%`,
+            }),
+          ],
+        });
+      }
+
+      if (assigneeName) {
+        andConds.push({
+          [Op.or]: [
+            Sequelize.where(Sequelize.fn("LOWER", Sequelize.col("technician.name")), {
+              [Op.like]: `%${assigneeName}%`,
+            }),
+            Sequelize.where(Sequelize.fn("LOWER", Sequelize.col("supervisor.name")), {
+              [Op.like]: `%${assigneeName}%`,
+            }),
+          ],
+        });
+      }
+
+      // Region filter by name -> resolve to region_ids then filter technician/supervisor.region_id
+      if (regionName) {
+        try {
+          const regions = await Region.findAll({
+            where: Sequelize.where(Sequelize.fn("LOWER", Sequelize.col("region_name")), {
+              [Op.like]: `%${regionName}%`,
+            }),
+            attributes: ["region_id"],
+          });
+          const regionIds = regions.map((r) => r.region_id);
+          if (regionIds.length) {
+            andConds.push({
+              [Op.or]: [
+                Sequelize.where(Sequelize.col("technician.region_id"), { [Op.in]: regionIds }),
+                Sequelize.where(Sequelize.col("supervisor.region_id"), { [Op.in]: regionIds }),
+              ],
+            });
+          } else {
+            // No matching regions -> force empty result
+            andConds.push({ job_id: null });
+          }
+        } catch {
+          /* ignore region filter errors */
+        }
+      }
+
+      // Exact ID filters from FE (assignee_id -> match either technician or supervisor)
+      if (req.query.assignee_id) {
+        andConds.push({
+          [Op.or]: [
+            { technician_id: req.query.assignee_id },
+            { supervisor_id: req.query.assignee_id },
+          ],
+        });
+      }
+
+      if (req.query.region_id) {
+        andConds.push({
+          [Op.or]: [
+            Sequelize.where(Sequelize.col("technician.region_id"), req.query.region_id),
+            Sequelize.where(Sequelize.col("supervisor.region_id"), req.query.region_id),
+          ],
+        });
+      }
 
       // Safe sort fallback
       const attrs = Job.getAttributes ? Job.getAttributes() : {};
@@ -66,23 +186,37 @@ jobRouter.get(
           ? "createdAt"
           : Object.keys(attrs)[0];
 
+      const where = { ...whereBase, ...(req.scopeWhere || {}), ...(andConds.length ? { [Op.and]: andConds } : {}) };
+
+      const include = [
+        { model: Client, as: "client" },
+        { model: User, as: "technician", attributes: { exclude: ["password"] } },
+        { model: User, as: "supervisor", attributes: { exclude: ["password"] } },
+        { model: WorkType, as: "work_type" },
+        { model: JobType, as: "job_type" },
+        { model: NatureOfWork, as: "nature_of_work" },
+        { model: JobStatus, as: "job_status" },
+      ];
+
+      const jobAttrs = await getJobAttributesList();
       const { rows, count } = await Job.findAndCountAll({
         where,
         limit,
         offset,
         order: [[safeSort, order]],
-        include: [
-          { model: Client },
-          { model: User, as: "technician" },
-          { model: User, as: "supervisor" },
-          { model: WorkType },
-          { model: JobType },
-          { model: NatureOfWork },
-          { model: JobStatus, as: "job_status" },
-        ],
+        include,
+        attributes: jobAttrs,
       });
 
-      res.json({ data: rows, page, limit, total: count });
+      const data = rows.map((r) => {
+        const o = r?.toJSON ? r.toJSON() : r;
+        ensureGranularDurationFields(o);
+        if (o?.technician) delete o.technician.password;
+        if (o?.supervisor) delete o.supervisor.password;
+        return o;
+      });
+
+      res.json({ data, page, limit, total: count });
     } catch (e) {
       next(e);
     }
@@ -100,6 +234,51 @@ jobRouter.post("/", rbac("Manage Job", "add"), applyOrgScope, async (req, res, n
     const body = { ...req.body };
 
     if (req.user?.role_slug !== "super_admin") body.company_id = req.user.company_id;
+    const companyId = body.company_id;
+
+    // Require assignment to a technician and supervisor on create
+    if (!body.technician_id) {
+      const err = new Error("technician_id is required to create a job");
+      err.status = 400;
+      throw err;
+    }
+    if (!body.supervisor_id) {
+      const err = new Error("supervisor_id is required to create a job");
+      err.status = 400;
+      throw err;
+    }
+
+    // Validate technician exists in same company and has technician role
+    const technician = await User.findOne({ where: { user_id: body.technician_id, company_id: companyId } });
+    if (!technician) {
+      const err = new Error("technician_id does not exist or is not in the same company");
+      err.status = 400;
+      throw err;
+    }
+    if (technician.role_id) {
+      const tRole = await Role.findOne({ where: { role_id: technician.role_id } });
+      if (!tRole || String(tRole.role_slug || "").toLowerCase() !== "technician") {
+        const err = new Error("technician_id must belong to a user with technician role");
+        err.status = 400;
+        throw err;
+      }
+    }
+
+    // Validate supervisor exists in same company and has supervisor role
+    const supervisor = await User.findOne({ where: { user_id: body.supervisor_id, company_id: companyId } });
+    if (!supervisor) {
+      const err = new Error("supervisor_id does not exist or is not in the same company");
+      err.status = 400;
+      throw err;
+    }
+    if (supervisor.role_id) {
+      const sRole = await Role.findOne({ where: { role_id: supervisor.role_id } });
+      if (!sRole || String(sRole.role_slug || "").toLowerCase() !== "supervisor") {
+        const err = new Error("supervisor_id must belong to a user with supervisor role");
+        err.status = 400;
+        throw err;
+      }
+    }
 
     if (!body.reference_number) {
       body.reference_number = `JOB-${Date.now()}-${Math.random()
@@ -108,7 +287,80 @@ jobRouter.post("/", rbac("Manage Job", "add"), applyOrgScope, async (req, res, n
         .toUpperCase()}`;
     }
 
-    const created = await Job.create(body);
+    // Default initial job status to "Not Started" if not provided
+    if (!body.job_status_id) {
+      try {
+        const notStarted = await JobStatus.findOne({
+          where: {
+            status: true,
+            [Op.and]: [
+              Sequelize.where(
+                Sequelize.fn("LOWER", Sequelize.col("job_status_title")),
+                "not started"
+              ),
+            ],
+          },
+        });
+        if (notStarted) body.job_status_id = notStarted.job_status_id;
+      } catch {
+        /* ignore defaulting errors */
+      }
+    }
+
+    // Normalize estimated duration: accept either (days/hours/minutes) or total minutes
+    const hasGranular = ["estimated_days", "estimated_hours", "estimated_minutes"].some(
+      (k) => body[k] !== undefined && body[k] !== null
+    );
+
+    if (hasGranular) {
+      const d = Number.isFinite(Number(body.estimated_days)) ? Number(body.estimated_days) : 0;
+      const h = Number.isFinite(Number(body.estimated_hours)) ? Number(body.estimated_hours) : 0;
+      const m = Number.isFinite(Number(body.estimated_minutes)) ? Number(body.estimated_minutes) : 0;
+
+      if (d < 0 || h < 0 || m < 0 || !Number.isInteger(d) || !Number.isInteger(h) || !Number.isInteger(m)) {
+        const err = new Error("estimated_days/hours/minutes must be non-negative integers");
+        err.status = 400;
+        throw err;
+      }
+      if (h > 23 || m > 59) {
+        const err = new Error("estimated_hours must be 0-23 and estimated_minutes 0-59");
+        err.status = 400;
+        throw err;
+      }
+      body.estimated_days = d;
+      body.estimated_hours = h;
+      body.estimated_minutes = m;
+      body.estimated_duration = d * 24 * 60 + h * 60 + m;
+    } else if (body.estimated_duration !== undefined && body.estimated_duration !== null) {
+      const total = Number(body.estimated_duration);
+      if (!Number.isFinite(total) || total < 0) {
+        const err = new Error("estimated_duration must be a non-negative number of minutes");
+        err.status = 400;
+        throw err;
+      }
+      const d = Math.floor(total / (24 * 60));
+      const h = Math.floor((total % (24 * 60)) / 60);
+      const m = Math.floor(total % 60);
+      body.estimated_days = d;
+      body.estimated_hours = h;
+      body.estimated_minutes = m;
+      body.estimated_duration = Math.floor(total);
+    }
+
+    // Drop granular fields if DB columns are not available yet
+    const avail = await getJobColumnAvailability();
+    if (!avail.estimated_days) delete body.estimated_days;
+    if (!avail.estimated_hours) delete body.estimated_hours;
+    if (!avail.estimated_minutes) delete body.estimated_minutes;
+
+    const created = await Job.create(body, { returning: false });
+
+    // Reload with only existing columns to avoid undefined-column errors
+    const jobAttrs = await getJobAttributesList();
+    const createdFresh = await Job.findOne({
+      where: { job_id: created.job_id },
+      attributes: jobAttrs,
+    });
 
     if (created.job_status_id) {
       await JobStatusHistory.create({
@@ -118,7 +370,7 @@ jobRouter.post("/", rbac("Manage Job", "add"), applyOrgScope, async (req, res, n
       });
     }
 
-    res.status(201).json(created);
+    res.status(201).json(createdFresh || created);
   } catch (e) {
     next(e);
   }
@@ -130,15 +382,17 @@ jobRouter.post("/", rbac("Manage Job", "add"), applyOrgScope, async (req, res, n
  */
 jobRouter.get("/:id", rbac("Manage Job", "view"), applyOrgScope, async (req, res, next) => {
   try {
+    const jobAttrs = await getJobAttributesList();
     const job = await Job.findOne({
       where: { job_id: req.params.id, ...(req.scopeWhere || {}) },
+      attributes: jobAttrs,
       include: [
-        { model: Client },
-        { model: User, as: "technician" },
-        { model: User, as: "supervisor" },
-        { model: WorkType },
-        { model: JobType },
-        { model: NatureOfWork },
+        { model: Client, as: "client" },
+        { model: User, as: "technician", attributes: { exclude: ["password"] } },
+        { model: User, as: "supervisor", attributes: { exclude: ["password"] } },
+        { model: WorkType, as: "work_type" },
+        { model: JobType, as: "job_type" },
+        { model: NatureOfWork, as: "nature_of_work" },
         { model: JobStatus, as: "job_status" },
       ],
     });
@@ -151,16 +405,53 @@ jobRouter.get("/:id", rbac("Manage Job", "view"), applyOrgScope, async (req, res
       order: [["createdAt", "ASC"]],
     });
 
-    res.json({
-      job,
+    const jobPlain = job?.toJSON ? job.toJSON() : job;
+    ensureGranularDurationFields(jobPlain);
+    // Build actions based on current status
+    const allStatuses = await JobStatus.findAll({ where: { status: true } });
+    const norm = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+    const byKey = Object.fromEntries(allStatuses.map((s) => [norm(s.job_status_title), s]));
+    const currentKey = norm(jobPlain?.job_status?.job_status_title);
+
+    const actions = [];
+    // Approve/Reject from Not Started
+    if (currentKey === "notstarted") {
+      if (byKey["assignedtech"]) actions.push({ action: "approve", to_status_id: byKey["assignedtech"].job_status_id, to_status_title: byKey["assignedtech"].job_status_title });
+      if (byKey["rejected"]) actions.push({ action: "reject", to_status_id: byKey["rejected"].job_status_id, to_status_title: byKey["rejected"].job_status_title });
+    } else {
+      // After assignment
+      const next = ["enroute", "onsite", "completed", "unresolved"];
+      for (const k of next) {
+        if (byKey[k]) actions.push({ action: k, to_status_id: byKey[k].job_status_id, to_status_title: byKey[k].job_status_title });
+      }
+      // Toggle hold/resume
+      if (currentKey === "onhold") {
+        if (byKey["onresume"]) actions.push({ action: "resume", to_status_id: byKey["onresume"].job_status_id, to_status_title: byKey["onresume"].job_status_title });
+      } else {
+        if (byKey["onhold"]) actions.push({ action: "onhold", to_status_id: byKey["onhold"].job_status_id, to_status_title: byKey["onhold"].job_status_title });
+      }
+    }
+
+    // Single object with embedded status_history and available actions
+    const response = {
+      ...jobPlain,
       status_history: history.map((h) => ({
         id: h.id,
         job_status_id: h.job_status_id,
         job_status_title: h.JobStatus?.job_status_title,
+        job_status_color_code: h.JobStatus?.job_status_color_code,
         is_completed: h.is_completed,
+        completed: norm(h.JobStatus?.job_status_title) === "completed",
         at: h.createdAt,
       })),
-    });
+      available_actions: actions,
+    };
+
+    // Ensure no passwords leak in nested users
+    if (response.technician) delete response.technician.password;
+    if (response.supervisor) delete response.supervisor.password;
+
+    res.json(response);
   } catch (e) {
     next(e);
   }
@@ -179,7 +470,54 @@ jobRouter.put("/:id", rbac("Manage Job", "edit"), applyOrgScope, async (req, res
     if (!job) return res.status(404).json({ message: "Not found" });
 
     const prevStatus = job.job_status_id;
-    await job.update(req.body);
+
+    // Normalize estimated duration on updates
+    const updates = { ...req.body };
+    const hasGranular = ["estimated_days", "estimated_hours", "estimated_minutes"].some(
+      (k) => updates[k] !== undefined && updates[k] !== null
+    );
+    if (hasGranular) {
+      const d = updates.estimated_days !== undefined ? Number(updates.estimated_days) : job.estimated_days || 0;
+      const h = updates.estimated_hours !== undefined ? Number(updates.estimated_hours) : job.estimated_hours || 0;
+      const m = updates.estimated_minutes !== undefined ? Number(updates.estimated_minutes) : job.estimated_minutes || 0;
+
+      if (d < 0 || h < 0 || m < 0 || !Number.isInteger(d) || !Number.isInteger(h) || !Number.isInteger(m)) {
+        const err = new Error("estimated_days/hours/minutes must be non-negative integers");
+        err.status = 400;
+        throw err;
+      }
+      if (h > 23 || m > 59) {
+        const err = new Error("estimated_hours must be 0-23 and estimated_minutes 0-59");
+        err.status = 400;
+        throw err;
+      }
+      updates.estimated_days = d;
+      updates.estimated_hours = h;
+      updates.estimated_minutes = m;
+      updates.estimated_duration = d * 24 * 60 + h * 60 + m;
+    } else if (updates.estimated_duration !== undefined && updates.estimated_duration !== null) {
+      const total = Number(updates.estimated_duration);
+      if (!Number.isFinite(total) || total < 0) {
+        const err = new Error("estimated_duration must be a non-negative number of minutes");
+        err.status = 400;
+        throw err;
+      }
+      const d = Math.floor(total / (24 * 60));
+      const h = Math.floor((total % (24 * 60)) / 60);
+      const m = Math.floor(total % 60);
+      updates.estimated_days = d;
+      updates.estimated_hours = h;
+      updates.estimated_minutes = m;
+      updates.estimated_duration = Math.floor(total);
+    }
+
+    // Drop granular fields if DB columns are not available yet
+    const avail = await getJobColumnAvailability();
+    if (!avail.estimated_days) delete updates.estimated_days;
+    if (!avail.estimated_hours) delete updates.estimated_hours;
+    if (!avail.estimated_minutes) delete updates.estimated_minutes;
+
+    await job.update(updates, { returning: false });
 
     if (req.body.job_status_id && req.body.job_status_id !== prevStatus) {
       await JobStatusHistory.create({
@@ -189,7 +527,10 @@ jobRouter.put("/:id", rbac("Manage Job", "edit"), applyOrgScope, async (req, res
       });
     }
 
-    res.json(job);
+    const jobAttrs = await getJobAttributesList();
+    const reloaded = await Job.findOne({ where: { job_id: job.job_id }, attributes: jobAttrs });
+
+    res.json(reloaded || job);
   } catch (e) {
     next(e);
   }
@@ -205,7 +546,12 @@ jobRouter.delete("/:id", rbac("Manage Job", "delete"), applyOrgScope, async (req
     });
     if (!job) return res.status(404).json({ message: "Not found" });
 
-    await job.destroy();
+    // Delete within a transaction to avoid FK violations
+    await sequelize.transaction(async (t) => {
+      await JobStatusHistory.destroy({ where: { job_id: job.job_id }, transaction: t });
+      await job.destroy({ transaction: t });
+    });
+
     res.json({ message: "Deleted" });
   } catch (e) {
     next(e);
