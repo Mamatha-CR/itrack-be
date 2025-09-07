@@ -107,6 +107,19 @@ jobRouter.get(
       }
 
       const andConds = [];
+      // Restrict technicians to only their assigned or supervised jobs (based on token)
+      const roleSlug = String(req.user?.role_slug || "").trim().toLowerCase();
+      if (roleSlug === "technician") {
+        const actorId = req.user?.sub || req.user?.user_id;
+        if (actorId) {
+          andConds.push({
+            [Op.or]: [
+              { technician_id: actorId },
+              { supervisor_id: actorId },
+            ],
+          });
+        }
+      }
       if (clientName) {
         andConds.push({
           [Op.or]: [
@@ -468,6 +481,16 @@ jobRouter.put("/:id", rbac("Manage Job", "edit"), applyOrgScope, async (req, res
       where: { job_id: req.params.id, ...(req.scopeWhere || {}) },
     });
     if (!job) return res.status(404).json({ message: "Not found" });
+
+    // Technicians can only access their own assigned/supervised jobs
+    const roleSlug = String(req.user?.role_slug || "").trim().toLowerCase();
+    const actorId = req.user?.sub || req.user?.user_id;
+    if (roleSlug === "technician" && actorId) {
+      const j = job?.toJSON ? job.toJSON() : job;
+      if (j.technician_id !== actorId && j.supervisor_id !== actorId) {
+        return res.status(404).json({ message: "Not found" });
+      }
+    }
 
     const prevStatus = job.job_status_id;
 

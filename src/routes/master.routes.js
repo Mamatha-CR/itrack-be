@@ -195,13 +195,55 @@ masterRouter.use(
     normalize: (body) => {
       if (typeof body.region_name === "string") body.region_name = body.region_name.trim();
       if (Array.isArray(body.pincodes)) {
-        body.pincodes = body.pincodes.map((p) => String(p).replace(/\s+/g, ""));
+        body.pincodes = body.pincodes
+          .map((p) => String(p).replace(/\s+/g, "").toUpperCase())
+          .filter((p) => p);
       }
     },
     findExistingWhere: (req) => ({
       company_id: req.user?.role_slug !== "super_admin" ? req.user.company_id : req.body.company_id,
       region_name: (req.body.region_name || "").trim(),
     }),
+    // Ensure pincodes are not mapped to multiple regions (global uniqueness)
+    preCreate: async (_req, body) => {
+      if (Array.isArray(body.pincodes) && body.pincodes.length) {
+        const cleaned = body.pincodes.map((p) => String(p).replace(/\s+/g, "").toUpperCase());
+        const regions = await Region.findAll({ attributes: ["region_id", "region_name", "pincodes"], raw: true });
+        const used = new Set();
+        for (const r of regions) {
+          for (const p of r.pincodes || []) {
+            const norm = String(p).replace(/\s+/g, "").toUpperCase();
+            if (norm) used.add(norm);
+          }
+        }
+        const conflicts = cleaned.filter((p) => used.has(p));
+        if (conflicts.length) {
+          const err = new Error(`Pincodes already mapped to a region: ${conflicts.join(", ")}`);
+          err.status = 400;
+          throw err;
+        }
+      }
+    },
+    preUpdate: async (_req, body, row) => {
+      if (Array.isArray(body.pincodes) && body.pincodes.length) {
+        const cleaned = body.pincodes.map((p) => String(p).replace(/\s+/g, "").toUpperCase());
+        const regions = await Region.findAll({ attributes: ["region_id", "region_name", "pincodes"], raw: true });
+        const used = new Set();
+        for (const r of regions) {
+          if (r.region_id === row.region_id) continue; // exclude self
+          for (const p of r.pincodes || []) {
+            const norm = String(p).replace(/\s+/g, "").toUpperCase();
+            if (norm) used.add(norm);
+          }
+        }
+        const conflicts = cleaned.filter((p) => used.has(p));
+        if (conflicts.length) {
+          const err = new Error(`Pincodes already mapped to a region: ${conflicts.join(", ")}`);
+          err.status = 400;
+          throw err;
+        }
+      }
+    },
   })
 );
 

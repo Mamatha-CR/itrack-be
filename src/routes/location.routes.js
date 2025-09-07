@@ -1,7 +1,8 @@
 // src/routes/location.routes.js
 import express from "express";
-import { Country, State, District, Pincode } from "../models/index.js";
+import { Country, State, District, Pincode, Region } from "../models/index.js";
 import { buildCrudRoutes } from "../utils/crudFactory.js";
+import { Op, Sequelize } from "sequelize";
 
 export const locationRouter = express.Router();
 
@@ -25,6 +26,33 @@ locationRouter.use(
     preCreate: onlySuperAdminCreate, // 👈 create restricted to super_admin
     // If you also want to block edits to non-super:
     // preUpdate: onlySuperAdminCreate,
+    // Filter availability via ?available=true|false
+    listWhere: async (req) => {
+      const raw = String(req.query.available ?? "").toLowerCase();
+      const truthy = new Set(["1", "true", "t", "yes", "y"]);
+      const falsy = new Set(["0", "false", "f", "no", "n"]);
+      if (!truthy.has(raw) && !falsy.has(raw)) return {};
+      const regions = await Region.findAll({ attributes: ["pincodes"], raw: true });
+      const used = new Set();
+      for (const r of regions) {
+        for (const p of r.pincodes || []) {
+          const norm = String(p).replace(/\s+/g, "").toUpperCase();
+          if (norm) used.add(norm);
+        }
+      }
+      const arr = Array.from(used);
+      // Normalize DB value: UPPER(REGEXP_REPLACE(pincode, '\\s+', '', 'g'))
+      const normCol = Sequelize.fn(
+        "upper",
+        Sequelize.fn("regexp_replace", Sequelize.col("pincode"), "\\s+", "", "g")
+      );
+      if (truthy.has(raw)) {
+        return arr.length ? { [Op.and]: [Sequelize.where(normCol, { [Op.notIn]: arr })] } : {};
+      }
+      return arr.length
+        ? { [Op.and]: [Sequelize.where(normCol, { [Op.in]: arr })] }
+        : { [Op.and]: [Sequelize.where(normCol, { [Op.in]: ["__none__match__"] })] };
+    },
   })
 );
 

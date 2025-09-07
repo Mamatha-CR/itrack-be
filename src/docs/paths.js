@@ -356,6 +356,9 @@
  *   get:
  *     tags: [Settings]
  *     summary: List pincodes
+ *     description: |
+ *       List pincodes with optional availability filter. Availability indicates
+ *       whether a pincode is currently mapped to any Region.
  *     security: [ { bearerAuth: [] } ]
  *     parameters:
  *       - in: query
@@ -374,6 +377,13 @@
  *       - in: query
  *         name: pincode
  *         schema: { type: string }
+ *       - in: query
+ *         name: available
+ *         schema: { type: boolean }
+ *         description: |
+ *           Filter by availability for region mapping. When true, returns only
+ *           pincodes not mapped to any region. When false, returns only pincodes
+ *           already mapped to a region. Omit to return all.
  *       - in: query
  *         name: page
  *         schema: { type: integer, default: 1 }
@@ -1011,6 +1021,10 @@
  *   post:
  *     tags: [Masters]
  *     summary: Create region
+ *     description: |
+ *       Business rule: A pincode can be mapped to at most one region. If any
+ *       provided pincode is already used by another region, the request fails
+ *       with 400 and lists the conflicting pincodes.
  *     security: [ { bearerAuth: [] } ]
  *     requestBody:
  *       required: true
@@ -1033,6 +1047,7 @@
  *               status: { type: boolean, example: true }
  *     responses:
  *       201: { description: Created }
+ *       400: { description: Bad Request (pincodes already mapped to a region) }
  *       409: { description: Conflict (duplicate) }
  * /masters/regions/{id}:
  *   get:
@@ -1044,6 +1059,10 @@
  *   put:
  *     tags: [Masters]
  *     summary: Update region
+ *     description: |
+ *       Business rule: A pincode can be mapped to at most one region. If any
+ *       updated pincode is already used by another region, the request fails
+ *       with 400 and lists the conflicting pincodes.
  *     security: [ { bearerAuth: [] } ]
  *     parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } } ]
  *     requestBody:
@@ -1064,6 +1083,7 @@
  *               status: { type: boolean, example: true }
  *     responses:
  *       200: { description: OK }
+ *       400: { description: Bad Request (pincodes already mapped to a region) }
  *       409: { description: Conflict (duplicate) }
  *       404: { description: Not found }
  *   delete:
