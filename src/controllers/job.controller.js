@@ -427,9 +427,9 @@ jobRouter.get("/:id", rbac("Manage Job", "view"), applyOrgScope, async (req, res
     const currentKey = norm(jobPlain?.job_status?.job_status_title);
 
     const actions = [];
-    // Approve/Reject from Not Started
+    // Accept/Reject from Not Started
     if (currentKey === "notstarted") {
-      if (byKey["assignedtech"]) actions.push({ action: "approve", to_status_id: byKey["assignedtech"].job_status_id, to_status_title: byKey["assignedtech"].job_status_title });
+      if (byKey["assignedtech"]) actions.push({ action: "accept", to_status_id: byKey["assignedtech"].job_status_id, to_status_title: byKey["assignedtech"].job_status_title });
       if (byKey["rejected"]) actions.push({ action: "reject", to_status_id: byKey["rejected"].job_status_id, to_status_title: byKey["rejected"].job_status_title });
     } else {
       // After assignment

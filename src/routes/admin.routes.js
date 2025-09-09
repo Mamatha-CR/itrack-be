@@ -1,10 +1,60 @@
 // src/routes/admin.routes.js
 import express from "express";
-import { Op } from "sequelize";
+import multer from "multer";
+import { rbac } from "../middleware/rbac.js";
+import { Op, fn, col, literal } from "sequelize";
 import { buildCrudRoutes } from "../utils/crudFactory.js";
-import { Company, Vendor, User, Client, Role, Shift, Region } from "../models/index.js";
+import { parseListQuery } from "../middleware/pagination.js";
+import { Company, Vendor, User, Client, Role, Shift, Region, Attendance } from "../models/index.js";
+import { uploadBufferToS3 } from "../utils/s3.js";
 
 export const adminRouter = express.Router();
+
+// Multer instance for mixed uploads (images and PDFs)
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: Number(process.env.MAX_UPLOAD_BYTES || 10 * 1024 * 1024) },
+  fileFilter: (_req, file, cb) => {
+    const ok = /^image\//i.test(file.mimetype) || file.mimetype === "application/pdf";
+    if (!ok) return cb(new Error("Only image or PDF uploads are allowed"));
+    cb(null, true);
+  },
+});
+
+// Helpers to safely coerce multipart string fields
+function isBlank(v) {
+  return v === undefined || v === null || (typeof v === "string" && v.trim() === "");
+}
+function toOptBool(v) {
+  if (isBlank(v)) return undefined;
+  if (typeof v === "boolean") return v;
+  const s = String(v).trim().toLowerCase();
+  if (s === "true" || s === "1") return true;
+  if (s === "false" || s === "0") return false;
+  return undefined;
+}
+function toOptInt(v) {
+  if (isBlank(v)) return undefined;
+  const n = Number.parseInt(v, 10);
+  return Number.isFinite(n) ? n : undefined;
+}
+function toOptFloat(v) {
+  if (isBlank(v)) return undefined;
+  const n = Number.parseFloat(v);
+  return Number.isFinite(n) ? n : undefined;
+}
+function toOptDate(v) {
+  if (isBlank(v)) return undefined;
+  const d = new Date(v);
+  return Number.isFinite(d.getTime()) ? d : undefined;
+}
+function toOptUuid(v) {
+  if (isBlank(v)) return undefined;
+  const s = String(v).trim();
+  // Treat literal 'null'/'undefined' as unset
+  if (["null", "undefined"].includes(s.toLowerCase())) return undefined;
+  return s; // allow Sequelize to validate UUID format
+}
 
 /**
  * Pagination & filters supported (handled by crudFactory):
@@ -15,6 +65,235 @@ export const adminRouter = express.Router();
  */
 
 /* ======================= COMPANIES (super_admin only) ======================= */
+
+/**
+ * @openapi
+ * /admin/companies:
+ *   post:
+ *     summary: Create a company (supports multipart with logo and proof)
+ *     tags: [Companies]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               logo:
+ *                 type: string
+ *                 format: binary
+ *                 description: Company logo image
+ *               proof:
+ *                 type: string
+ *                 format: binary
+ *                 description: Proof image or PDF
+ *               company_id:
+ *                 type: string
+ *                 format: uuid
+ *                 description: Super admin only; others ignored
+ *               name:
+ *                 type: string
+ *               gst:
+ *                 type: string
+ *               email:
+ *                 type: string
+ *               phone:
+ *                 type: string
+ *               password:
+ *                 type: string
+ *               address_1:
+ *                 type: string
+ *               country_id:
+ *                 type: integer
+ *               state_id:
+ *                 type: string
+ *                 format: uuid
+ *               city:
+ *                 type: string
+ *               postal_code:
+ *                 type: string
+ *               lat:
+ *                 type: number
+ *                 format: float
+ *               lng:
+ *                 type: number
+ *                 format: float
+ *               subscription_id:
+ *                 type: string
+ *                 format: uuid
+ *               no_of_users:
+ *                 type: integer
+ *               subscription_startDate:
+ *                 type: string
+ *                 format: date-time
+ *               subscription_endDate:
+ *                 type: string
+ *                 format: date-time
+ *               subscription_amountPerUser:
+ *                 type: number
+ *               remarks:
+ *                 type: string
+ *               theme_color:
+ *                 type: string
+ *               status:
+ *                 type: boolean
+ *           encoding:
+ *             logo:
+ *               contentType: image/png, image/jpeg
+ *             proof:
+ *               contentType: image/png, image/jpeg, application/pdf
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               company_id:
+ *                 type: string
+ *                 format: uuid
+ *               logo:
+ *                 type: string
+ *               name:
+ *                 type: string
+ *               gst:
+ *                 type: string
+ *               email:
+ *                 type: string
+ *               phone:
+ *                 type: string
+ *               address_1:
+ *                 type: string
+ *               country_id:
+ *                 type: integer
+ *               state_id:
+ *                 type: string
+ *                 format: uuid
+ *               city:
+ *                 type: string
+ *               postal_code:
+ *                 type: string
+ *               lat:
+ *                 type: number
+ *               lng:
+ *                 type: number
+ *               proof:
+ *                 type: string
+ *               subscription_id:
+ *                 type: string
+ *                 format: uuid
+ *               no_of_users:
+ *                 type: integer
+ *               subscription_startDate:
+ *                 type: string
+ *                 format: date-time
+ *               subscription_endDate:
+ *                 type: string
+ *                 format: date-time
+ *               subscription_amountPerUser:
+ *                 type: number
+ *               remarks:
+ *                 type: string
+ *               theme_color:
+ *                 type: string
+ *               status:
+ *                 type: boolean
+ *             example:
+ *               company_id: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+ *               logo: https://cdn.example.com/uploads/company/logo/2025-09-09/logo.png
+ *               name: Firetminds
+ *               gst: GSTABCD1234
+ *               email: info@firetminds.com
+ *               phone: "9876543210"
+ *               address_1: Address line 1
+ *               country_id: 91
+ *               state_id: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+ *               city: Chennai
+ *               postal_code: "600006"
+ *               lat: 13.0907
+ *               lng: 78.6084
+ *               proof: https://cdn.example.com/uploads/company/proof/2025-09-09/proof.pdf
+ *               subscription_id: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+ *               no_of_users: 10
+ *               subscription_startDate: 2025-09-09T04:54:21.227Z
+ *               subscription_endDate: 2026-09-09T04:54:21.227Z
+ *               subscription_amountPerUser: 299.5
+ *               remarks: Some remarks
+ *               theme_color: "#47A63A"
+ *               status: true
+ *     responses:
+ *       201:
+ *         description: Created company
+ */
+adminRouter.post(
+  "/companies",
+  rbac("Company", "add"),
+  upload.fields([
+    { name: "logo", maxCount: 1 },
+    { name: "proof", maxCount: 1 },
+  ]),
+  async (req, res, next) => {
+    try {
+      const body = { ...req.body };
+      // Normalize
+      if (typeof body.name === "string") body.name = body.name.trim();
+      if (typeof body.email === "string") body.email = body.email.trim().toLowerCase();
+      if (typeof body.phone === "string") body.phone = String(body.phone).replace(/\D+/g, "");
+      if (typeof body.gst === "string") body.gst = body.gst.trim().toUpperCase();
+
+      // Coerce optionals from multipart strings safely
+      if (body.company_id !== undefined) {
+        const v = toOptUuid(body.company_id);
+        if (v === undefined) delete body.company_id; else body.company_id = v;
+      }
+      if (body.subscription_id !== undefined) {
+        const v = toOptUuid(body.subscription_id);
+        if (v === undefined) delete body.subscription_id; else body.subscription_id = v;
+      }
+      if (body.state_id !== undefined) {
+        const v = toOptUuid(body.state_id);
+        if (v === undefined) delete body.state_id; else body.state_id = v;
+      }
+      if (body.country_id !== undefined) body.country_id = toOptInt(body.country_id);
+      if (body.no_of_users !== undefined) body.no_of_users = toOptInt(body.no_of_users);
+      if (body.subscription_amountPerUser !== undefined)
+        body.subscription_amountPerUser = toOptFloat(body.subscription_amountPerUser);
+      if (body.lat !== undefined) body.lat = toOptFloat(body.lat);
+      if (body.lng !== undefined) body.lng = toOptFloat(body.lng);
+      if (body.status !== undefined) body.status = toOptBool(body.status);
+      if (body.subscription_startDate !== undefined)
+        body.subscription_startDate = toOptDate(body.subscription_startDate);
+      if (body.subscription_endDate !== undefined)
+        body.subscription_endDate = toOptDate(body.subscription_endDate);
+
+      const files = req.files || {};
+      if (files.logo?.[0]) {
+        const f = files.logo[0];
+        const { url } = await uploadBufferToS3({
+          buffer: f.buffer,
+          filename: f.originalname,
+          contentType: f.mimetype,
+          keyPrefix: process.env.S3_KEY_PREFIX_LOGO || "uploads/company/logo/",
+        });
+        body.logo = url;
+      }
+      if (files.proof?.[0]) {
+        const f = files.proof[0];
+        const { url } = await uploadBufferToS3({
+          buffer: f.buffer,
+          filename: f.originalname,
+          contentType: f.mimetype,
+          keyPrefix: process.env.S3_KEY_PREFIX_PROOF || "uploads/company/proof/",
+        });
+        body.proof = url;
+      }
+
+      const created = await Company.create(body);
+      return res.status(201).json(created);
+    } catch (e) {
+      next(e);
+    }
+  }
+);
 adminRouter.use(
   "/companies",
   buildCrudRoutes({
@@ -36,6 +315,200 @@ adminRouter.use(
       if (typeof body.postal_code === "string") body.postal_code = body.postal_code.trim();
     },
   })
+);
+
+adminRouter.post(
+  "/companies/with-files",
+  rbac("Company", "add"),
+  upload.fields([
+    { name: "logo", maxCount: 1 },
+    { name: "proof", maxCount: 1 },
+  ]),
+  async (req, res, next) => {
+    try {
+      // Text fields available from multipart
+      const body = { ...req.body };
+
+      // Optional: normalize a few known fields similar to CRUD route
+      if (typeof body.name === "string") body.name = body.name.trim();
+      if (typeof body.email === "string") body.email = body.email.trim().toLowerCase();
+      if (typeof body.phone === "string") body.phone = String(body.phone).replace(/\D+/g, "");
+      if (typeof body.gst === "string") body.gst = body.gst.trim().toUpperCase();
+
+      // Coerce optionals from multipart strings safely
+      if (body.company_id !== undefined) {
+        const v = toOptUuid(body.company_id);
+        if (v === undefined) delete body.company_id; else body.company_id = v;
+      }
+      if (body.subscription_id !== undefined) {
+        const v = toOptUuid(body.subscription_id);
+        if (v === undefined) delete body.subscription_id; else body.subscription_id = v;
+      }
+      if (body.state_id !== undefined) {
+        const v = toOptUuid(body.state_id);
+        if (v === undefined) delete body.state_id; else body.state_id = v;
+      }
+      if (body.country_id !== undefined) body.country_id = toOptInt(body.country_id);
+      if (body.no_of_users !== undefined) body.no_of_users = toOptInt(body.no_of_users);
+      if (body.subscription_amountPerUser !== undefined)
+        body.subscription_amountPerUser = toOptFloat(body.subscription_amountPerUser);
+      if (body.lat !== undefined) body.lat = toOptFloat(body.lat);
+      if (body.lng !== undefined) body.lng = toOptFloat(body.lng);
+      if (body.status !== undefined) body.status = toOptBool(body.status);
+      if (body.subscription_startDate !== undefined)
+        body.subscription_startDate = toOptDate(body.subscription_startDate);
+      if (body.subscription_endDate !== undefined)
+        body.subscription_endDate = toOptDate(body.subscription_endDate);
+
+      // Upload files if provided
+      const files = req.files || {};
+      if (files.logo?.[0]) {
+        const f = files.logo[0];
+        const { url } = await uploadBufferToS3({
+          buffer: f.buffer,
+          filename: f.originalname,
+          contentType: f.mimetype,
+          keyPrefix: process.env.S3_KEY_PREFIX_LOGO || "uploads/company/logo/",
+        });
+        body.logo = url;
+      }
+      if (files.proof?.[0]) {
+        const f = files.proof[0];
+        const { url } = await uploadBufferToS3({
+          buffer: f.buffer,
+          filename: f.originalname,
+          contentType: f.mimetype,
+          keyPrefix: process.env.S3_KEY_PREFIX_PROOF || "uploads/company/proof/",
+        });
+        body.proof = url;
+      }
+
+      const created = await Company.create(body);
+      return res.status(201).json(created);
+    } catch (e) {
+      if (String(e?.message || "").includes("uploads are allowed")) e.status = 400;
+      next(e);
+    }
+  }
+);
+
+adminRouter.post(
+  "/clients/with-photo",
+  rbac("Clients/Customer", "add"),
+  upload.single("photo"),
+  async (req, res, next) => {
+    try {
+      const isSuper = req.user?.role_slug === "super_admin";
+      const body = { ...req.body };
+      if (typeof body.email === "string") body.email = body.email.trim().toLowerCase();
+      if (typeof body.phone === "string") body.phone = String(body.phone).replace(/\D+/g, "");
+      if (!isSuper) body.company_id = req.user?.company_id;
+      if (isSuper && !body.company_id) {
+        const err = new Error("company_id is required for super_admin");
+        err.status = 400;
+        throw err;
+      }
+
+      if (req.file) {
+        const up = await uploadBufferToS3({
+          buffer: req.file.buffer,
+          filename: req.file.originalname,
+          contentType: req.file.mimetype,
+          keyPrefix: process.env.S3_KEY_PREFIX_CLIENT_PHOTO || "uploads/client/photo/",
+        });
+        body.photo = up.url;
+      }
+
+      const created = await Client.create(body);
+      res.status(201).json(created);
+    } catch (e) {
+      next(e);
+    }
+  }
+);
+
+adminRouter.post(
+  "/vendors/with-photo",
+  rbac("Vendor / Contractor", "add"),
+  upload.single("photo"),
+  async (req, res, next) => {
+    try {
+      const isSuper = req.user?.role_slug === "super_admin";
+      const body = { ...req.body };
+      if (typeof body.email === "string") body.email = body.email.trim().toLowerCase();
+      if (typeof body.phone === "string") body.phone = String(body.phone).replace(/\D+/g, "");
+      if (!isSuper) body.company_id = req.user?.company_id;
+      if (isSuper && !body.company_id) {
+        const err = new Error("company_id is required for super_admin");
+        err.status = 400;
+        throw err;
+      }
+
+      if (req.file) {
+        const up = await uploadBufferToS3({
+          buffer: req.file.buffer,
+          filename: req.file.originalname,
+          contentType: req.file.mimetype,
+          keyPrefix: process.env.S3_KEY_PREFIX_VENDOR_PHOTO || "uploads/vendor/photo/",
+        });
+        body.photo = up.url;
+      }
+
+      const created = await Vendor.create(body);
+      res.status(201).json(created);
+    } catch (e) {
+      next(e);
+    }
+  }
+);
+
+adminRouter.post(
+  "/users/with-files",
+  rbac("Technician", "add"),
+  upload.fields([
+    { name: "photo", maxCount: 1 },
+    { name: "kyc", maxCount: 1 },
+  ]),
+  async (req, res, next) => {
+    try {
+      const isSuper = req.user?.role_slug === "super_admin";
+      const body = { ...req.body };
+      if (typeof body.email === "string") body.email = body.email.trim().toLowerCase();
+      if (typeof body.phone === "string") body.phone = String(body.phone).replace(/\D+/g, "");
+      if (!isSuper) body.company_id = req.user?.company_id;
+      if (isSuper && !body.company_id) {
+        const err = new Error("company_id is required for super_admin");
+        err.status = 400;
+        throw err;
+      }
+
+      if (req.files?.photo?.[0]) {
+        const f = req.files.photo[0];
+        const up = await uploadBufferToS3({
+          buffer: f.buffer,
+          filename: f.originalname,
+          contentType: f.mimetype,
+          keyPrefix: process.env.S3_KEY_PREFIX_USER_PHOTO || "uploads/user/photo/",
+        });
+        body.photo = up.url;
+      }
+      if (req.files?.kyc?.[0]) {
+        const f = req.files.kyc[0];
+        const up = await uploadBufferToS3({
+          buffer: f.buffer,
+          filename: f.originalname,
+          contentType: f.mimetype,
+          keyPrefix: process.env.S3_KEY_PREFIX_USER_KYC || "uploads/user/kyc/",
+        });
+        body.proof = up.url;
+      }
+
+      const created = await User.create(body);
+      res.status(201).json(created);
+    } catch (e) {
+      next(e);
+    }
+  }
 );
 
 /* ======================= VENDORS (org-scoped; company REQUIRED) ======================= */
@@ -85,6 +558,62 @@ adminRouter.use(
       if (body.company_id) delete body.company_id; // never move tenant
     },
   })
+);
+
+/**
+ * @openapi
+ * /admin/vendors:
+ *   post:
+ *     summary: Create a vendor (supports multipart with photo)
+ *     tags: [Vendors]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               photo:
+ *                 type: string
+ *                 format: binary
+ *               vendor_name:
+ *                 type: string
+ *               email:
+ *                 type: string
+ *               phone:
+ *                 type: string
+ *               password:
+ *                 type: string
+ *               company_id:
+ *                 type: string
+ *                 format: uuid
+ *                 description: Super admin only; others ignored
+ *     responses:
+ *       201:
+ *         description: Created vendor
+ */
+// Pre-upload middleware then delegate to CRUD create for validations
+adminRouter.post(
+  "/vendors",
+  upload.single("photo"),
+  async (req, _res, next) => {
+    try {
+      if (req.file) {
+        const up = await uploadBufferToS3({
+          buffer: req.file.buffer,
+          filename: req.file.originalname,
+          contentType: req.file.mimetype,
+          keyPrefix: process.env.S3_KEY_PREFIX_VENDOR_PHOTO || "uploads/vendor/photo/",
+        });
+        req.body.photo = up.url;
+      }
+      return next();
+    } catch (e) {
+      return next(e);
+    }
+  }
 );
 
 /* ======================= USERS (org-scoped) ======================= */
@@ -280,6 +809,87 @@ adminRouter.use(
   })
 );
 
+/**
+ * @openapi
+ * /admin/users:
+ *   post:
+ *     summary: Create a user (supports multipart with photo and KYC)
+ *     tags: [Users]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               photo:
+ *                 type: string
+ *                 format: binary
+ *               kyc:
+ *                 type: string
+ *                 format: binary
+ *               name:
+ *                 type: string
+ *               email:
+ *                 type: string
+ *               phone:
+ *                 type: string
+ *               password:
+ *                 type: string
+ *               role_id:
+ *                 type: string
+ *                 format: uuid
+ *               vendor_id:
+ *                 type: string
+ *                 format: uuid
+ *               supervisor_id:
+ *                 type: string
+ *                 format: uuid
+ *               company_id:
+ *                 type: string
+ *                 format: uuid
+ *                 description: Super admin only; others ignored
+ *     responses:
+ *       201:
+ *         description: Created user
+ */
+adminRouter.post(
+  "/users",
+  upload.fields([
+    { name: "photo", maxCount: 1 },
+    { name: "kyc", maxCount: 1 },
+  ]),
+  async (req, _res, next) => {
+    try {
+      if (req.files?.photo?.[0]) {
+        const f = req.files.photo[0];
+        const up = await uploadBufferToS3({
+          buffer: f.buffer,
+          filename: f.originalname,
+          contentType: f.mimetype,
+          keyPrefix: process.env.S3_KEY_PREFIX_USER_PHOTO || "uploads/user/photo/",
+        });
+        req.body.photo = up.url;
+      }
+      if (req.files?.kyc?.[0]) {
+        const f = req.files.kyc[0];
+        const up = await uploadBufferToS3({
+          buffer: f.buffer,
+          filename: f.originalname,
+          contentType: f.mimetype,
+          keyPrefix: process.env.S3_KEY_PREFIX_USER_KYC || "uploads/user/kyc/",
+        });
+        req.body.proof = up.url;
+      }
+      return next();
+    } catch (e) {
+      return next(e);
+    }
+  }
+);
+
 /* ======================= CLIENTS (org-scoped; company required) ======================= */
 adminRouter.use(
   "/clients",
@@ -312,4 +922,204 @@ adminRouter.use(
       if (body.company_id) delete body.company_id;
     },
   })
+);
+
+/**
+ * @openapi
+ * /admin/attendance:
+ *   get:
+ *     summary: List attendance records (admin)
+ *     tags: [Attendance]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: company_id
+ *         schema: { type: string, format: uuid }
+ *       - in: query
+ *         name: user_id
+ *         schema: { type: string, format: uuid }
+ *       - in: query
+ *         name: from
+ *         schema: { type: string, format: date-time }
+ *       - in: query
+ *         name: to
+ *         schema: { type: string, format: date-time }
+ *       - in: query
+ *         name: page
+ *         schema: { type: integer }
+ *       - in: query
+ *         name: limit
+ *         schema: { type: integer }
+ *     responses:
+ *       200:
+ *         description: Paginated attendance
+ */
+adminRouter.get(
+  "/attendance",
+  rbac("Attendance", "view"),
+  parseListQuery,
+  async (req, res, next) => {
+    try {
+      const { limit, offset, order } = req.listQuery;
+      const isSuper = req.user?.role_slug === "super_admin";
+      const where = {};
+      if (!isSuper) where.company_id = req.user?.company_id;
+      if (req.query.company_id && isSuper) where.company_id = String(req.query.company_id);
+      if (req.query.user_id) where.user_id = String(req.query.user_id);
+      if (req.query.from || req.query.to) {
+        where.check_in_at = {};
+        if (req.query.from) where.check_in_at[Op.gte] = new Date(req.query.from);
+        if (req.query.to) where.check_in_at[Op.lte] = new Date(req.query.to);
+      }
+
+      const { rows, count } = await Attendance.findAndCountAll({
+        where,
+        include: [{ model: User, as: "user", attributes: ["user_id", "name", "email", "phone", "photo"] }],
+        order: [["check_in_at", order]],
+        limit,
+        offset,
+      });
+
+      res.json({ data: rows, total: count, page: req.listQuery.page, limit });
+    } catch (e) {
+      next(e);
+    }
+  }
+);
+
+/**
+ * @openapi
+ * /admin/attendance/summary:
+ *   get:
+ *     summary: Attendance summary by day or user (admin)
+ *     tags: [Attendance]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: groupBy
+ *         required: true
+ *         schema: { type: string, enum: [day, user] }
+ *       - in: query
+ *         name: company_id
+ *         schema: { type: string, format: uuid }
+ *       - in: query
+ *         name: user_id
+ *         schema: { type: string, format: uuid }
+ *       - in: query
+ *         name: from
+ *         schema: { type: string, format: date-time }
+ *       - in: query
+ *         name: to
+ *         schema: { type: string, format: date-time }
+ *     responses:
+ *       200:
+ *         description: Summary rows
+ */
+adminRouter.get(
+  "/attendance/summary",
+  rbac("Attendance", "view"),
+  async (req, res, next) => {
+    try {
+      const isSuper = req.user?.role_slug === "super_admin";
+      const where = {};
+      if (!isSuper) where.company_id = req.user?.company_id;
+      if (req.query.company_id && isSuper) where.company_id = String(req.query.company_id);
+      if (req.query.user_id) where.user_id = String(req.query.user_id);
+      if (req.query.from || req.query.to) {
+        where.check_in_at = {};
+        if (req.query.from) where.check_in_at[Op.gte] = new Date(req.query.from);
+        if (req.query.to) where.check_in_at[Op.lte] = new Date(req.query.to);
+      }
+
+      const groupBy = String(req.query.groupBy || "").toLowerCase();
+      if (!["day", "user"].includes(groupBy)) {
+        return res.status(400).json({ message: "groupBy must be 'day' or 'user'" });
+      }
+
+      if (groupBy === "day") {
+        const rows = await Attendance.findAll({
+          where,
+          attributes: [[fn("date_trunc", "day", col("check_in_at")), "day"], [fn("sum", col("total_minutes")), "total_minutes"]],
+          group: [fn("date_trunc", "day", col("check_in_at"))],
+          order: [[literal("day"), "ASC"]],
+          raw: true,
+        });
+        return res.json({ data: rows });
+      }
+
+      // group by user
+      const rows = await Attendance.findAll({
+        where,
+        attributes: ["user_id", [fn("sum", col("total_minutes")), "total_minutes"]],
+        group: ["user_id"],
+        raw: true,
+      });
+
+      // join minimal user info
+      const userIds = rows.map((r) => r.user_id);
+      const users = await User.findAll({ where: { user_id: { [Op.in]: userIds } }, attributes: ["user_id", "name", "email", "photo"] });
+      const map = Object.fromEntries(users.map((u) => [u.user_id, u.toJSON ? u.toJSON() : u]));
+      const out = rows.map((r) => ({ ...r, user: map[r.user_id] || null }));
+      return res.json({ data: out });
+    } catch (e) {
+      next(e);
+    }
+  }
+);
+
+/**
+ * @openapi
+ * /admin/clients:
+ *   post:
+ *     summary: Create a client (supports multipart with photo)
+ *     tags: [Clients]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               photo:
+ *                 type: string
+ *                 format: binary
+ *               firstName:
+ *                 type: string
+ *               lastName:
+ *                 type: string
+ *               email:
+ *                 type: string
+ *               phone:
+ *                 type: string
+ *               company_id:
+ *                 type: string
+ *                 format: uuid
+ *                 description: Super admin only; others ignored
+ *     responses:
+ *       201:
+ *         description: Created client
+ */
+adminRouter.post(
+  "/clients",
+  upload.single("photo"),
+  async (req, _res, next) => {
+    try {
+      if (req.file) {
+        const up = await uploadBufferToS3({
+          buffer: req.file.buffer,
+          filename: req.file.originalname,
+          contentType: req.file.mimetype,
+          keyPrefix: process.env.S3_KEY_PREFIX_CLIENT_PHOTO || "uploads/client/photo/",
+        });
+        req.body.photo = up.url;
+      }
+      return next();
+    } catch (e) {
+      return next(e);
+    }
+  }
 );

@@ -11,6 +11,8 @@ import { authRequired } from "./middleware/auth.js";
 import { errorHandler } from "./middleware/errorHandler.js";
 import swaggerUi from "swagger-ui-express";
 import { swaggerSpec } from "./config/swagger.js";
+import { uploadRouter } from "./routes/upload.routes.js";
+import { attendanceRouter } from "./routes/attendance.routes.js";
 
 dotenv.config();
 const app = express();
@@ -28,6 +30,8 @@ app.use("/api/settings", authRequired, locationRouter);
 app.use("/api/masters", authRequired, masterRouter);
 app.use("/api/admin", authRequired, adminRouter);
 app.use("/api/jobs", authRequired, jobRouter);
+app.use("/api/uploads", authRequired, uploadRouter);
+app.use("/api/attendance", authRequired, attendanceRouter);
 
 app.get("/api/health", (req, res) => res.json({ ok: true }));
 

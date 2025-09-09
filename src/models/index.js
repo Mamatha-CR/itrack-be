@@ -22,6 +22,7 @@ import UserInit from "./User.js";
 import ClientInit from "./Client.js";
 import JobInit from "./Job.js";
 import JobStatusHistoryInit from "./JobStatusHistory.js";
+import AttendanceInit from "./Attendance.js";
 
 // Create models
 export const Country = CountryInit(sequelize);
@@ -45,6 +46,7 @@ export const User = UserInit(sequelize);
 export const Client = ClientInit(sequelize);
 export const Job = JobInit(sequelize);
 export const JobStatusHistory = JobStatusHistoryInit(sequelize);
+export const Attendance = AttendanceInit(sequelize);
 
 // Associations
 State.belongsTo(Country, { foreignKey: "country_id" });
@@ -88,6 +90,11 @@ Job.hasMany(JobStatusHistory, { foreignKey: "job_id", onDelete: "CASCADE", hooks
 // Link history entries to their status record for eager loading
 JobStatusHistory.belongsTo(JobStatus, { foreignKey: "job_status_id" });
 JobStatus.hasMany(JobStatusHistory, { foreignKey: "job_status_id" });
+
+// Attendance associations
+Attendance.belongsTo(Company, { foreignKey: "company_id" });
+Attendance.belongsTo(User, { foreignKey: "user_id", as: "user" });
+User.hasMany(Attendance, { foreignKey: "user_id" });
 
 RoleScreenPermission.belongsTo(Role, { foreignKey: "role_id" });
 Role.hasMany(RoleScreenPermission, { foreignKey: "role_id" });
