@@ -237,6 +237,101 @@ jobRouter.get(
 );
 
 /**
+ * @openapi
+ * /jobs/summary:
+ *   get:
+ *     summary: Summary counts of jobs for the logged-in context
+ *     tags: [Jobs]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Summary counts
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 yet_to_accept:
+ *                   type: integer
+ *                   description: Jobs with status Not Started
+ *                 total_jobs:
+ *                   type: integer
+ *                   description: Jobs with status Assigned Tech
+ *                 completed:
+ *                   type: integer
+ *                   description: Jobs with status Completed
+ *                 panding:
+ *                   type: integer
+ *                   description: Jobs with status EnRoute, OnSite, or OnHold
+ */
+jobRouter.get(
+  "/summary",
+  rbac("Manage Job", "view"),
+  applyOrgScope,
+  async (req, res, next) => {
+    try {
+      const roleSlug = String(req.user?.role_slug || "").trim().toLowerCase();
+      const actorId = req.user?.sub || req.user?.user_id;
+
+      // Map status titles -> IDs
+      const statuses = await JobStatus.findAll({ where: { status: true } });
+      const norm = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+      const idByKey = Object.fromEntries(statuses.map((s) => [norm(s.job_status_title), s.job_status_id]));
+
+      const notStartedId = idByKey["notstarted"];
+      const completedId = idByKey["completed"];
+      const cancelledId = idByKey["cancelled"];
+      const rejectedId = idByKey["rejected"];
+      const assignedTechId = idByKey["assignedtech"];
+      const pandingSet = [idByKey["enroute"], idByKey["onsite"], idByKey["onhold"]].filter(Boolean);
+
+      // Base where respecting org scope
+      const baseWhere = { ...(req.scopeWhere || {}) };
+      // Restrict technicians to their assigned/supervised jobs
+      if (roleSlug === "technician" && actorId) {
+        baseWhere[Op.or] = [{ technician_id: actorId }, { supervisor_id: actorId }];
+      }
+
+      // yet_to_accept: Not Started
+      const yetToAccept = notStartedId
+        ? await Job.count({ where: { ...baseWhere, job_status_id: notStartedId } })
+        : 0;
+
+      // completed: Completed
+      const completed = completedId
+        ? await Job.count({ where: { ...baseWhere, job_status_id: completedId } })
+        : 0;
+
+      // total_jobs: Assigned Tech
+      const total_jobs = assignedTechId
+        ? await Job.count({ where: { ...baseWhere, job_status_id: assignedTechId } })
+        : 0;
+
+      // panding: EnRoute, OnSite, OnHold
+      const panding = pandingSet.length
+        ? await Job.count({ where: { ...baseWhere, job_status_id: { [Op.in]: pandingSet } } })
+        : 0;
+
+      // overdue: scheduledDateAndTime < now and not in terminal statuses Completed/Cancelled/Rejected
+      const now = new Date();
+      const excludeSet = [completedId, cancelledId, rejectedId].filter(Boolean);
+      const overdue = await Job.count({
+        where: {
+          ...baseWhere,
+          scheduledDateAndTime: { [Op.lt]: now },
+          ...(excludeSet.length ? { job_status_id: { [Op.notIn]: excludeSet } } : {}),
+        },
+      });
+
+      res.json({ yet_to_accept: yetToAccept, total_jobs, completed, panding, overdue });
+    } catch (e) {
+      next(e);
+    }
+  }
+);
+
+/**
  * POST /jobs
  * - Org scoping: non-super_admin company_id is forced from token.
  * - reference_number auto-generated if absent.
@@ -389,6 +484,8 @@ jobRouter.post("/", rbac("Manage Job", "add"), applyOrgScope, async (req, res, n
   }
 });
 
+// moved earlier above the ":id" route to avoid param capture
+
 /**
  * GET /jobs/:id
  * Returns the job plus a normalized status history timeline.
@@ -469,6 +566,97 @@ jobRouter.get("/:id", rbac("Manage Job", "view"), applyOrgScope, async (req, res
     next(e);
   }
 });
+
+/**
+ * @openapi
+ * /jobs/summary:
+ *   get:
+ *     summary: Summary counts of jobs for the logged-in context
+ *     tags: [Jobs]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Summary counts
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 yet_to_accept:
+ *                   type: integer
+ *                 completed:
+ *                   type: integer
+ *                 overdue:
+ *                   type: integer
+ *                 waiting_for_submission:
+ *                   type: integer
+ */
+jobRouter.get(
+  "/summary",
+  rbac("Manage Job", "view"),
+  applyOrgScope,
+  async (req, res, next) => {
+    try {
+      const roleSlug = String(req.user?.role_slug || "").trim().toLowerCase();
+      const actorId = req.user?.sub || req.user?.user_id;
+
+      // Map status titles -> IDs
+      const statuses = await JobStatus.findAll({ where: { status: true } });
+      const norm = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+      const idByKey = Object.fromEntries(statuses.map((s) => [norm(s.job_status_title), s.job_status_id]));
+
+      const notStartedId = idByKey["notstarted"];
+      const completedId = idByKey["completed"];
+      const cancelledId = idByKey["cancelled"];
+      const rejectedId = idByKey["rejected"];
+      const waitingSet = [
+        idByKey["assignedtech"],
+        idByKey["enroute"],
+        idByKey["onsite"],
+        idByKey["onresume"],
+        idByKey["onhold"],
+      ].filter(Boolean);
+
+      // Base where respecting org scope
+      const baseWhere = { ...(req.scopeWhere || {}) };
+      // Restrict technicians to their assigned/supervised jobs
+      if (roleSlug === "technician" && actorId) {
+        baseWhere[Op.or] = [{ technician_id: actorId }, { supervisor_id: actorId }];
+      }
+
+      // yet_to_accept: Not Started
+      const yetToAccept = notStartedId
+        ? await Job.count({ where: { ...baseWhere, job_status_id: notStartedId } })
+        : 0;
+
+      // completed: Completed
+      const completed = completedId
+        ? await Job.count({ where: { ...baseWhere, job_status_id: completedId } })
+        : 0;
+
+      // waiting_for_submission: in waitingSet statuses
+      const waiting_for_submission = waitingSet.length
+        ? await Job.count({ where: { ...baseWhere, job_status_id: { [Op.in]: waitingSet } } })
+        : 0;
+
+      // overdue: scheduledDateAndTime < now and not in terminal statuses Completed/Cancelled/Rejected
+      const now = new Date();
+      const excludeSet = [completedId, cancelledId, rejectedId].filter(Boolean);
+      const overdue = await Job.count({
+        where: {
+          ...baseWhere,
+          scheduledDateAndTime: { [Op.lt]: now },
+          ...(excludeSet.length ? { job_status_id: { [Op.notIn]: excludeSet } } : {}),
+        },
+      });
+
+      res.json({ yet_to_accept: yetToAccept, completed, overdue, waiting_for_submission });
+    } catch (e) {
+      next(e);
+    }
+  }
+);
 
 /**
  * PUT /jobs/:id
