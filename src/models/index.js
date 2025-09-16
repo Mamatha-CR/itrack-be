@@ -103,4 +103,28 @@ Screen.hasMany(RoleScreenPermission, { foreignKey: "screen_id" });
 
 export async function syncAll() {
   await sequelize.sync({ alter: true });
+  // Ensure numeric short-id sequence for jobs exists and starts at 6 digits
+  try {
+    await sequelize.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_class c
+          JOIN pg_namespace n ON n.oid = c.relnamespace
+          WHERE c.relkind = 'S' AND c.relname = 'job_id_seq'
+        ) THEN
+          CREATE SEQUENCE job_id_seq START WITH 100000 MINVALUE 100000;
+        END IF;
+      END $$;
+    `);
+    // If sequence exists but below 100000, bump it
+    const [rows] = await sequelize.query("SELECT last_value FROM job_id_seq");
+    const last = Array.isArray(rows) ? rows[0]?.last_value : rows?.last_value;
+    if (Number(last) < 100000) {
+      await sequelize.query("ALTER SEQUENCE job_id_seq RESTART WITH 100000");
+    }
+  } catch (e) {
+    // Log but do not crash startup
+    console.warn("Sequence ensure failed:", e?.message || e);
+  }
 }

@@ -15,21 +15,42 @@ export default (sequelize) => {
         unique: true,
         validate: { isEmail: true },
       },
-      phone: { type: DataTypes.STRING, allowNull: false, unique: true },
+      phone: {
+        type: DataTypes.STRING,
+        allowNull: false,
+        unique: true,
+        validate: {
+          // Allow digits-only strings of reasonable phone length (after normalization)
+          len: [7, 20],
+          is: /^\d+$/,
+        },
+      },
       password: { type: DataTypes.STRING, allowNull: false },
       address_1: DataTypes.STRING,
-      country_id: DataTypes.INTEGER,
+      country_id: { type: DataTypes.INTEGER, validate: { min: 0 } },
       state_id: DataTypes.UUID,
       city: DataTypes.STRING,
       postal_code: DataTypes.STRING,
-      lat: DataTypes.DECIMAL(10, 7),
-      lng: DataTypes.DECIMAL(10, 7),
+      lat: { type: DataTypes.DECIMAL(10, 7), validate: { min: -90, max: 90 } },
+      lng: { type: DataTypes.DECIMAL(10, 7), validate: { min: -180, max: 180 } },
       proof: DataTypes.STRING,
       subscription_id: DataTypes.UUID,
-      no_of_users: { type: DataTypes.INTEGER, defaultValue: 0 },
+      no_of_users: { type: DataTypes.INTEGER, defaultValue: 0, validate: { min: 0 } },
       subscription_startDate: DataTypes.DATE,
       subscription_endDate: DataTypes.DATE,
-      subscription_amountPerUser: DataTypes.DECIMAL(10, 2),
+      subscription_amountPerUser: {
+        type: DataTypes.DECIMAL(10, 2),
+        validate: {
+          min: 0,
+          // Upper bound aligned with DECIMAL(10,2) capacity (8 integer digits)
+          max(value) {
+            if (value == null) return;
+            const n = Number(value);
+            if (!Number.isFinite(n)) throw new Error("subscription_amountPerUser must be a number");
+            if (n > 99999999.99) throw new Error("subscription_amountPerUser exceeds maximum allowed value");
+          },
+        },
+      },
       remarks: DataTypes.TEXT,
       theme_color: DataTypes.STRING,
       status: { type: DataTypes.BOOLEAN, defaultValue: true },

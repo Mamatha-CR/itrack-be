@@ -15,9 +15,20 @@ const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: Number(process.env.MAX_UPLOAD_BYTES || 10 * 1024 * 1024) },
   fileFilter: (_req, file, cb) => {
-    const ok = /^image\//i.test(file.mimetype) || file.mimetype === "application/pdf";
-    if (!ok) return cb(new Error("Only image or PDF uploads are allowed"));
-    cb(null, true);
+    // If the client sent an empty file field or no mimetype, ignore it gracefully
+    const name = String(file?.originalname || "").trim();
+    const type = String(file?.mimetype || "").trim().toLowerCase();
+    if (!name || !type) return cb(null, false);
+
+    const isImage = /^image\//i.test(type);
+    const isPdf = type === "application/pdf";
+    if (!isImage && !isPdf) {
+      const err = new Error("Only image or PDF uploads are allowed");
+      err.status = 400;
+      err.code = "INVALID_UPLOAD_TYPE";
+      return cb(err);
+    }
+    return cb(null, true);
   },
 });
 
@@ -265,6 +276,28 @@ adminRouter.post(
       if (body.subscription_endDate !== undefined)
         body.subscription_endDate = toOptDate(body.subscription_endDate);
 
+      // Guard common numeric ranges to avoid DB numeric overflow
+      const bad = (message) => {
+        const err = new Error(message);
+        err.status = 400;
+        throw err;
+      };
+      if (body.lat !== undefined && (body.lat < -90 || body.lat > 90)) {
+        bad("lat must be between -90 and 90");
+      }
+      if (body.lng !== undefined && (body.lng < -180 || body.lng > 180)) {
+        bad("lng must be between -180 and 180");
+      }
+      if (body.subscription_amountPerUser !== undefined) {
+        const v = body.subscription_amountPerUser;
+        if (v < 0) bad("subscription_amountPerUser must be >= 0");
+        if (v > 99999999.99) bad("subscription_amountPerUser exceeds maximum allowed value");
+      }
+      if (body.no_of_users !== undefined) {
+        const n = body.no_of_users;
+        if (!Number.isInteger(n) || n < 0) bad("no_of_users must be a non-negative integer");
+      }
+
       const files = req.files || {};
       if (files.logo?.[0]) {
         const f = files.logo[0];
@@ -359,6 +392,28 @@ adminRouter.post(
         body.subscription_startDate = toOptDate(body.subscription_startDate);
       if (body.subscription_endDate !== undefined)
         body.subscription_endDate = toOptDate(body.subscription_endDate);
+
+      // Guard common numeric ranges to avoid DB numeric overflow
+      const bad = (message) => {
+        const err = new Error(message);
+        err.status = 400;
+        throw err;
+      };
+      if (body.lat !== undefined && (body.lat < -90 || body.lat > 90)) {
+        bad("lat must be between -90 and 90");
+      }
+      if (body.lng !== undefined && (body.lng < -180 || body.lng > 180)) {
+        bad("lng must be between -180 and 180");
+      }
+      if (body.subscription_amountPerUser !== undefined) {
+        const v = body.subscription_amountPerUser;
+        if (v < 0) bad("subscription_amountPerUser must be >= 0");
+        if (v > 99999999.99) bad("subscription_amountPerUser exceeds maximum allowed value");
+      }
+      if (body.no_of_users !== undefined) {
+        const n = body.no_of_users;
+        if (!Number.isInteger(n) || n < 0) bad("no_of_users must be a non-negative integer");
+      }
 
       // Upload files if provided
       const files = req.files || {};
@@ -525,14 +580,48 @@ adminRouter.use(
       if (typeof body.phone === "string") body.phone = String(body.phone).replace(/\D+/g, "");
       if (typeof body.postal_code === "string") body.postal_code = body.postal_code.trim();
       if (typeof body.address_1 === "string") body.address_1 = body.address_1.trim();
+
+      // Coerce common multipart string fields to proper types
+      if (body.company_id !== undefined) body.company_id = toOptUuid(body.company_id);
+      if (body.role_id !== undefined) body.role_id = toOptUuid(body.role_id);
+      if (body.region_id !== undefined) body.region_id = toOptUuid(body.region_id);
+      if (body.state_id !== undefined) body.state_id = toOptUuid(body.state_id);
+      if (body.country_id !== undefined) body.country_id = toOptInt(body.country_id);
     },
     // company required (super_admin must pass; org users auto-filled)
     preCreate: async (req, body) => {
+      // Required fields validation (before hitting DB)
+      if (isBlank(body.vendor_name)) {
+        const err = new Error("vendor_name is required");
+        err.status = 400;
+        err.field = "vendor_name";
+        throw err;
+      }
+      if (isBlank(body.email)) {
+        const err = new Error("email is required");
+        err.status = 400;
+        err.field = "email";
+        throw err;
+      }
+      if (isBlank(body.phone)) {
+        const err = new Error("phone is required");
+        err.status = 400;
+        err.field = "phone";
+        throw err;
+      }
+      if (isBlank(body.password)) {
+        const err = new Error("password is required");
+        err.status = 400;
+        err.field = "password";
+        throw err;
+      }
+
       const isSuper = req.user?.role_slug === "super_admin";
       const companyId = isSuper ? body.company_id : req.user?.company_id;
       if (!companyId) {
         const err = new Error("company_id is required to create a vendor");
         err.status = 400;
+        err.field = "company_id";
         throw err;
       }
       // Verify company exists
@@ -540,6 +629,7 @@ adminRouter.use(
       if (!company) {
         const err = new Error("company_id does not exist");
         err.status = 400;
+        err.field = "company_id";
         throw err;
       }
       body.company_id = companyId;
@@ -550,6 +640,7 @@ adminRouter.use(
         if (!role) {
           const err = new Error("role_id does not exist");
           err.status = 400;
+          err.field = "role_id";
           throw err;
         }
       }
@@ -633,6 +724,28 @@ adminRouter.use(
       if (typeof body.city === "string") body.city = body.city.trim();
       if (typeof body.address_1 === "string") body.address_1 = body.address_1.trim();
       if (typeof body.postal_code === "string") body.postal_code = body.postal_code.trim();
+
+      // Coerce ID and numeric fields from multipart
+      if (body.company_id !== undefined) body.company_id = toOptUuid(body.company_id);
+      if (body.role_id !== undefined) body.role_id = toOptUuid(body.role_id);
+      if (body.vendor_id !== undefined) body.vendor_id = toOptUuid(body.vendor_id);
+      if (body.supervisor_id !== undefined) body.supervisor_id = toOptUuid(body.supervisor_id);
+      if (body.shift_id !== undefined) body.shift_id = toOptUuid(body.shift_id);
+      if (body.region_id !== undefined) body.region_id = toOptUuid(body.region_id);
+      if (body.country_id !== undefined) body.country_id = toOptInt(body.country_id);
+
+      // region_ids can arrive as JSON string or comma-separated list
+      if (typeof body.region_ids === "string") {
+        try {
+          const parsed = JSON.parse(body.region_ids);
+          if (Array.isArray(parsed)) body.region_ids = parsed.map(toOptUuid).filter(Boolean);
+        } catch {
+          body.region_ids = String(body.region_ids)
+            .split(",")
+            .map((s) => toOptUuid(s))
+            .filter(Boolean);
+        }
+      }
     },
 
     // 🔒 List hook: only show Supervisor + Technician
@@ -648,11 +761,38 @@ adminRouter.use(
 
     // Enforce required vendor for these roles
     preCreate: async (req, body) => {
+      // Required fields validation (before hitting DB)
+      if (isBlank(body.name)) {
+        const err = new Error("name is required");
+        err.status = 400;
+        err.field = "name";
+        throw err;
+      }
+      if (isBlank(body.email)) {
+        const err = new Error("email is required");
+        err.status = 400;
+        err.field = "email";
+        throw err;
+      }
+      if (isBlank(body.phone)) {
+        const err = new Error("phone is required");
+        err.status = 400;
+        err.field = "phone";
+        throw err;
+      }
+      if (isBlank(body.password)) {
+        const err = new Error("password is required");
+        err.status = 400;
+        err.field = "password";
+        throw err;
+      }
+
       const isSuper = req.user?.role_slug === "super_admin";
       const companyId = isSuper ? body.company_id : req.user?.company_id;
       if (!companyId) {
         const err = new Error("company_id is required to create a user");
         err.status = 400;
+        err.field = "company_id";
         throw err;
       }
       // Verify company exists
@@ -667,12 +807,14 @@ adminRouter.use(
       if (!body.role_id) {
         const err = new Error("role_id is required");
         err.status = 400;
+        err.field = "role_id";
         throw err;
       }
       const role = await Role.findOne({ where: { role_id: body.role_id } });
       if (!role) {
         const err = new Error("role_id does not exist");
         err.status = 400;
+        err.field = "role_id";
         throw err;
       }
       const slug = String(role.role_slug || "").toLowerCase();
@@ -681,6 +823,7 @@ adminRouter.use(
         if (!body.vendor_id) {
           const err = new Error("vendor_id is required for technician/supervisor");
           err.status = 400;
+          err.field = "vendor_id";
           throw err;
         }
         const vendor = await Vendor.findOne({
@@ -689,6 +832,7 @@ adminRouter.use(
         if (!vendor) {
           const err = new Error("vendor_id does not exist or does not belong to the same company");
           err.status = 400;
+          err.field = "vendor_id";
           throw err;
         }
       }
@@ -698,12 +842,14 @@ adminRouter.use(
         if (!body.supervisor_id) {
           const err = new Error("supervisor_id is required for technician");
           err.status = 400;
+          err.field = "supervisor_id";
           throw err;
         }
         const supervisor = await User.findOne({ where: { user_id: body.supervisor_id, company_id: companyId } });
         if (!supervisor) {
           const err = new Error("supervisor_id does not exist or is not in the same company");
           err.status = 400;
+          err.field = "supervisor_id";
           throw err;
         }
         if (supervisor.role_id) {
@@ -711,6 +857,7 @@ adminRouter.use(
           if (!sRole || String(sRole.role_slug || "").toLowerCase() !== "supervisor") {
             const err = new Error("supervisor_id must belong to a user with supervisor role");
             err.status = 400;
+            err.field = "supervisor_id";
             throw err;
           }
         }
@@ -722,6 +869,7 @@ adminRouter.use(
         if (!shift) {
           const err = new Error("shift_id does not exist");
           err.status = 400;
+          err.field = "shift_id";
           throw err;
         }
       }
@@ -731,6 +879,7 @@ adminRouter.use(
         if (!supervisor) {
           const err = new Error("supervisor_id does not exist or is not in the same company");
           err.status = 400;
+          err.field = "supervisor_id";
           throw err;
         }
       }
@@ -740,6 +889,7 @@ adminRouter.use(
         if (!region) {
           const err = new Error("region_id does not exist");
           err.status = 400;
+          err.field = "region_id";
           throw err;
         }
       }
@@ -749,6 +899,7 @@ adminRouter.use(
         if (regions.length !== body.region_ids.length) {
           const err = new Error("One or more region_ids do not exist");
           err.status = 400;
+          err.field = "region_ids";
           throw err;
         }
       }
@@ -907,13 +1058,45 @@ adminRouter.use(
       if (typeof body.city === "string") body.city = body.city.trim();
       if (typeof body.address_1 === "string") body.address_1 = body.address_1.trim();
       if (typeof body.postal_code === "string") body.postal_code = body.postal_code.trim();
+
+      // Coerce IDs and numeric/boolean fields
+      if (body.company_id !== undefined) body.company_id = toOptUuid(body.company_id);
+      if (body.business_typeId !== undefined) body.business_typeId = toOptUuid(body.business_typeId);
+      if (body.state_id !== undefined) body.state_id = toOptUuid(body.state_id);
+      if (body.country_id !== undefined) body.country_id = toOptInt(body.country_id);
+      if (body.lat !== undefined) body.lat = toOptFloat(body.lat);
+      if (body.lng !== undefined) body.lng = toOptFloat(body.lng);
+      if (body.available_status !== undefined) body.available_status = toOptBool(body.available_status);
+      if (body.visiting_startTime === "") delete body.visiting_startTime;
+      if (body.visiting_endTime === "") delete body.visiting_endTime;
     },
     preCreate: async (req, body) => {
+      // Required client fields
+      if (isBlank(body.firstName)) {
+        const err = new Error("firstName is required");
+        err.status = 400;
+        err.field = "firstName";
+        throw err;
+      }
+      if (isBlank(body.email)) {
+        const err = new Error("email is required");
+        err.status = 400;
+        err.field = "email";
+        throw err;
+      }
+      if (isBlank(body.phone)) {
+        const err = new Error("phone is required");
+        err.status = 400;
+        err.field = "phone";
+        throw err;
+      }
+
       const isSuper = req.user?.role_slug === "super_admin";
       const companyId = isSuper ? body.company_id : req.user?.company_id;
       if (!companyId) {
         const err = new Error("company_id is required to create a client");
         err.status = 400;
+        err.field = "company_id";
         throw err;
       }
       body.company_id = companyId;

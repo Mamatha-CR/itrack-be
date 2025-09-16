@@ -163,8 +163,9 @@ export function buildCrudRoutes({
     try {
       const body = { ...req.body };
 
-      enforceOrgOwnership(model, req, body, { orgScoped });
+      // Normalize first so org enforcement sees properly coerced values
       if (typeof normalize === "function") normalize(body, "create");
+      enforceOrgOwnership(model, req, body, { orgScoped });
 
       if (typeof preCreate === "function") {
         await preCreate(req, body); // business-rule validation hook
@@ -186,11 +187,30 @@ export function buildCrudRoutes({
         return res.status(409).json({ message: `${model.name} already exists` });
       }
       if (isValidationError(e)) {
-        return res
-          .status(400)
-          .json({ message: "Validation error", errors: e.errors?.map((x) => x.message) });
+        const items = e.errors || [];
+        const mapField = (path, validatorKey, value, defaultMsg) => {
+          const v = value == null ? "" : String(value).trim();
+          const lower = String(path || "").toLowerCase();
+          const cap = (s) => s ? s.charAt(0).toUpperCase() + s.slice(1).replace(/_/g, " ") : "Field";
+          if (/notnull/i.test(validatorKey || "")) return `${cap(lower)} is required`;
+          if (lower === "email") return v ? "Invalid email" : "Email is required";
+          if (lower === "phone") return v ? "Invalid phone" : "Phone is required";
+          return defaultMsg || `Invalid ${cap(lower)}`;
+        };
+        const errors = items.map((it) => mapField(it.path, it.validatorKey || it.type, it.value, it.message));
+        const fields = Object.fromEntries(
+          items.map((it) => [
+            it.path,
+            mapField(it.path, it.validatorKey || it.type, it.value, it.message),
+          ])
+        );
+        return res.status(400).json({ message: "Validation error", errors, fields });
       }
-      if (e?.status) return res.status(e.status).json({ message: e.message });
+      if (e?.status) {
+        const payload = { message: e.message };
+        if (e.field) payload.field = e.field;
+        return res.status(e.status).json(payload);
+      }
       return next(e);
     }
   });
@@ -203,9 +223,10 @@ export function buildCrudRoutes({
       if (!row) return res.status(404).json({ message: "Not found" });
 
       const body = { ...req.body };
+      // Normalize first so org enforcement sees properly coerced values
+      if (typeof normalize === "function") normalize(body, "update");
       enforceOrgOwnership(model, req, body, { orgScoped });
       delete body.company_id; // never allow changing tenant
-      if (typeof normalize === "function") normalize(body, "update");
 
       if (typeof preUpdate === "function") {
         await preUpdate(req, body, row); // business-rule validation hook
@@ -218,11 +239,30 @@ export function buildCrudRoutes({
         return res.status(409).json({ message: `${model.name} already exists` });
       }
       if (isValidationError(e)) {
-        return res
-          .status(400)
-          .json({ message: "Validation error", errors: e.errors?.map((x) => x.message) });
+        const items = e.errors || [];
+        const mapField = (path, validatorKey, value, defaultMsg) => {
+          const v = value == null ? "" : String(value).trim();
+          const lower = String(path || "").toLowerCase();
+          const cap = (s) => s ? s.charAt(0).toUpperCase() + s.slice(1).replace(/_/g, " ") : "Field";
+          if (/notnull/i.test(validatorKey || "")) return `${cap(lower)} is required`;
+          if (lower === "email") return v ? "Invalid email" : "Email is required";
+          if (lower === "phone") return v ? "Invalid phone" : "Phone is required";
+          return defaultMsg || `Invalid ${cap(lower)}`;
+        };
+        const errors = items.map((it) => mapField(it.path, it.validatorKey || it.type, it.value, it.message));
+        const fields = Object.fromEntries(
+          items.map((it) => [
+            it.path,
+            mapField(it.path, it.validatorKey || it.type, it.value, it.message),
+          ])
+        );
+        return res.status(400).json({ message: "Validation error", errors, fields });
       }
-      if (e?.status) return res.status(e.status).json({ message: e.message });
+      if (e?.status) {
+        const payload = { message: e.message };
+        if (e.field) payload.field = e.field;
+        return res.status(e.status).json(payload);
+      }
       return next(e);
     }
   });
