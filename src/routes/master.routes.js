@@ -40,54 +40,57 @@ masterRouter.use(
 
 /* ---------- Job Statuses (under Manage Job) ---------- */
 // Ordered list endpoint (ASC by job_status_order)
-masterRouter.get(
-  "/job-statuses/ordered",
-  rbac("Manage Job", "view"),
-  async (req, res, next) => {
-    try {
-      const rows = await JobStatus.findAll({ where: { status: true } });
-      const normalize = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
-      const desiredOrder = {
-        notstarted: 1,
-        assignedtech: 2,
-        enroute: 3,
-        onsite: 4,
-        onhold: 5,
-        onresume: 6,
-        completed: 7,
-        cancelled: 8,
-        unresolved: 9,
-        // reject is outside main flow
-        rejected: 99,
-      };
+masterRouter.get("/job-statuses/ordered", rbac("Manage Job", "view"), async (req, res, next) => {
+  try {
+    const rows = await JobStatus.findAll({ where: { status: true } });
+    const normalize = (s) =>
+      String(s || "")
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "");
+    const desiredOrder = {
+      notstarted: 1,
+      assignedtech: 2,
+      enroute: 3,
+      onsite: 4,
+      onhold: 5,
+      onresume: 6,
+      completed: 7,
+      cancelled: 8,
+      unresolved: 9,
+      // reject is outside main flow
+      rejected: 99,
+    };
 
-      // Self-heal missing orders
-      for (const r of rows) {
-        const key = normalize(r.job_status_title);
-        const ord = desiredOrder[key];
-        if (ord && r.job_status_order !== ord) {
-          await r.update({ job_status_order: ord });
-        }
+    // Self-heal missing orders
+    for (const r of rows) {
+      const key = normalize(r.job_status_title);
+      const ord = desiredOrder[key];
+      if (ord && r.job_status_order !== ord) {
+        await r.update({ job_status_order: ord });
       }
-
-      const sorted = rows
-        .map((r) => ({ row: r, key: normalize(r.job_status_title) }))
-        .sort((a, b) => (a.row.job_status_order || desiredOrder[a.key] || 999) - (b.row.job_status_order || desiredOrder[b.key] || 999))
-        .map(({ row, key }) => ({
-          job_status_id: row.job_status_id,
-          job_status_title: row.job_status_title,
-          job_status_color_code: row.job_status_color_code,
-          job_status_order: row.job_status_order ?? desiredOrder[key] ?? null,
-          order: row.job_status_order ?? desiredOrder[key] ?? null,
-          key,
-        }));
-
-      return res.json({ data: sorted });
-    } catch (e) {
-      return next(e);
     }
+
+    const sorted = rows
+      .map((r) => ({ row: r, key: normalize(r.job_status_title) }))
+      .sort(
+        (a, b) =>
+          (a.row.job_status_order || desiredOrder[a.key] || 999) -
+          (b.row.job_status_order || desiredOrder[b.key] || 999)
+      )
+      .map(({ row, key }) => ({
+        job_status_id: row.job_status_id,
+        job_status_title: row.job_status_title,
+        job_status_color_code: row.job_status_color_code,
+        job_status_order: row.job_status_order ?? desiredOrder[key] ?? null,
+        order: row.job_status_order ?? desiredOrder[key] ?? null,
+        key,
+      }));
+
+    return res.json({ data: sorted });
+  } catch (e) {
+    return next(e);
   }
-);
+});
 masterRouter.use(
   "/job-statuses",
   buildCrudRoutes({
@@ -183,7 +186,6 @@ masterRouter.use(
   })
 );
 
-/* ---------- Regions (org-scoped) ---------- */
 masterRouter.use(
   "/regions",
   buildCrudRoutes({
@@ -192,56 +194,157 @@ masterRouter.use(
     searchFields: ["region_name"],
     exactFields: ["status", "company_id", "country_id", "state_id", "district_id"],
     statusFieldName: "status",
+
     normalize: (body) => {
       if (typeof body.region_name === "string") body.region_name = body.region_name.trim();
+
+      // Normalize & de-duplicate pincodes: keep only digits and uppercase (if any letters slip in)
+      const norm = (p) =>
+        String(p)
+          .replace(/\s+/g, "")
+          .toUpperCase()
+          .replace(/[^0-9A-Z]/g, "");
       if (Array.isArray(body.pincodes)) {
-        body.pincodes = body.pincodes
-          .map((p) => String(p).replace(/\s+/g, "").toUpperCase())
-          .filter((p) => p);
+        body.pincodes = [...new Set(body.pincodes.map(norm).filter(Boolean))];
       }
     },
+
     findExistingWhere: (req) => ({
       company_id: req.user?.role_slug !== "super_admin" ? req.user.company_id : req.body.company_id,
       region_name: (req.body.region_name || "").trim(),
     }),
-    // Ensure pincodes are not mapped to multiple regions (global uniqueness)
-    preCreate: async (_req, body) => {
-      if (Array.isArray(body.pincodes) && body.pincodes.length) {
-        const cleaned = body.pincodes.map((p) => String(p).replace(/\s+/g, "").toUpperCase());
-        const regions = await Region.findAll({ attributes: ["region_id", "region_name", "pincodes"], raw: true });
-        const used = new Set();
-        for (const r of regions) {
-          for (const p of r.pincodes || []) {
-            const norm = String(p).replace(/\s+/g, "").toUpperCase();
-            if (norm) used.add(norm);
-          }
-        }
-        const conflicts = cleaned.filter((p) => used.has(p));
-        if (conflicts.length) {
-          const err = new Error(`Pincodes already mapped to a region: ${conflicts.join(", ")}`);
-          err.status = 400;
-          throw err;
+
+    // ---------- CREATE: company-scoped pincode uniqueness ----------
+    preCreate: async (req, body) => {
+      if (!Array.isArray(body.pincodes) || body.pincodes.length === 0) return;
+
+      const norm = (p) =>
+        String(p)
+          .replace(/\s+/g, "")
+          .toUpperCase()
+          .replace(/[^0-9A-Z]/g, "");
+      const cleaned = [...new Set(body.pincodes.map(norm).filter(Boolean))];
+
+      // Resolve company in which we’re creating
+      const companyId =
+        req.user?.role_slug !== "super_admin" ? req.user?.company_id : body.company_id;
+      if (!companyId) {
+        const e = new Error("Company is required to map pincodes");
+        e.status = 400;
+        e.code = "COMPANY_REQUIRED";
+        throw e;
+      }
+
+      // Fetch only regions of the same company
+      const regions = await Region.findAll({
+        attributes: ["region_id", "region_name", "pincodes", "company_id"],
+        where: { company_id: companyId },
+        raw: true,
+      });
+
+      // Build index: PIN -> [ {region_id, region_name}... ]
+      const index = new Map();
+      for (const r of regions) {
+        for (const p of r.pincodes || []) {
+          const pin = norm(p);
+          if (!pin) continue;
+          if (!index.has(pin)) index.set(pin, []);
+          index.get(pin).push({ region_id: r.region_id, region_name: r.region_name });
         }
       }
+
+      // Find conflicts only within this company
+      const conflicts = cleaned
+        .map((pin) => ({ pin, holders: index.get(pin) || [] }))
+        .filter((x) => x.holders.length > 0);
+
+      if (conflicts.length) {
+        // Craft friendly message. If single conflict → specific sentence, else list pairs.
+        let message;
+        if (conflicts.length === 1 && conflicts[0].holders.length === 1) {
+          const { pin, holders } = conflicts[0];
+          message = `Pincode ${pin} is already linked in "${holders[0].region_name}" region`;
+        } else {
+          const list = conflicts
+            .map(
+              ({ pin, holders }) =>
+                `${pin} → ${holders.map((h) => `"${h.region_name}"`).join(", ")}`
+            )
+            .join("; ");
+          message = `Pincode(s) already mapped in this company: ${list}`;
+        }
+
+        const e = new Error(message);
+        e.status = 400;
+        e.code = "PINCODE_ALREADY_MAPPED";
+        e.meta = { company_id: companyId, conflicts };
+        throw e;
+      }
     },
-    preUpdate: async (_req, body, row) => {
-      if (Array.isArray(body.pincodes) && body.pincodes.length) {
-        const cleaned = body.pincodes.map((p) => String(p).replace(/\s+/g, "").toUpperCase());
-        const regions = await Region.findAll({ attributes: ["region_id", "region_name", "pincodes"], raw: true });
-        const used = new Set();
-        for (const r of regions) {
-          if (r.region_id === row.region_id) continue; // exclude self
-          for (const p of r.pincodes || []) {
-            const norm = String(p).replace(/\s+/g, "").toUpperCase();
-            if (norm) used.add(norm);
-          }
+
+    // ---------- UPDATE: company-scoped pincode uniqueness (exclude self) ----------
+    preUpdate: async (req, body, row) => {
+      if (!Array.isArray(body.pincodes) || body.pincodes.length === 0) return;
+
+      const norm = (p) =>
+        String(p)
+          .replace(/\s+/g, "")
+          .toUpperCase()
+          .replace(/[^0-9A-Z]/g, "");
+      const cleaned = [...new Set(body.pincodes.map(norm).filter(Boolean))];
+
+      const companyId =
+        req.user?.role_slug !== "super_admin"
+          ? req.user?.company_id
+          : (body.company_id ?? row.company_id);
+      if (!companyId) {
+        const e = new Error("Company is required to map pincodes");
+        e.status = 400;
+        e.code = "COMPANY_REQUIRED";
+        throw e;
+      }
+
+      const regions = await Region.findAll({
+        attributes: ["region_id", "region_name", "pincodes", "company_id"],
+        where: { company_id: companyId },
+        raw: true,
+      });
+
+      const index = new Map();
+      for (const r of regions) {
+        if (r.region_id === row.region_id) continue; // exclude the row being updated
+        for (const p of r.pincodes || []) {
+          const pin = norm(p);
+          if (!pin) continue;
+          if (!index.has(pin)) index.set(pin, []);
+          index.get(pin).push({ region_id: r.region_id, region_name: r.region_name });
         }
-        const conflicts = cleaned.filter((p) => used.has(p));
-        if (conflicts.length) {
-          const err = new Error(`Pincodes already mapped to a region: ${conflicts.join(", ")}`);
-          err.status = 400;
-          throw err;
+      }
+
+      const conflicts = cleaned
+        .map((pin) => ({ pin, holders: index.get(pin) || [] }))
+        .filter((x) => x.holders.length > 0);
+
+      if (conflicts.length) {
+        let message;
+        if (conflicts.length === 1 && conflicts[0].holders.length === 1) {
+          const { pin, holders } = conflicts[0];
+          message = `Pincode ${pin} is already linked in ${holders[0].region_name} region`;
+        } else {
+          const list = conflicts
+            .map(
+              ({ pin, holders }) =>
+                `${pin} → ${holders.map((h) => `"${h.region_name}"`).join(", ")}`
+            )
+            .join("; ");
+          message = `Pincode(s) already mapped in this company: ${list}`;
         }
+
+        const e = new Error(message);
+        e.status = 400;
+        e.code = "PINCODE_ALREADY_MAPPED";
+        e.meta = { company_id: companyId, conflicts };
+        throw e;
       }
     },
   })

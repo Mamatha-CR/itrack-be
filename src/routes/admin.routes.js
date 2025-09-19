@@ -17,7 +17,9 @@ const upload = multer({
   fileFilter: (_req, file, cb) => {
     // If the client sent an empty file field or no mimetype, ignore it gracefully
     const name = String(file?.originalname || "").trim();
-    const type = String(file?.mimetype || "").trim().toLowerCase();
+    const type = String(file?.mimetype || "")
+      .trim()
+      .toLowerCase();
     if (!name || !type) return cb(null, false);
 
     const isImage = /^image\//i.test(type);
@@ -297,15 +299,18 @@ adminRouter.post(
       // Coerce optionals from multipart strings safely
       if (body.company_id !== undefined) {
         const v = toOptUuid(body.company_id);
-        if (v === undefined) delete body.company_id; else body.company_id = v;
+        if (v === undefined) delete body.company_id;
+        else body.company_id = v;
       }
       if (body.subscription_id !== undefined) {
         const v = toOptUuid(body.subscription_id);
-        if (v === undefined) delete body.subscription_id; else body.subscription_id = v;
+        if (v === undefined) delete body.subscription_id;
+        else body.subscription_id = v;
       }
       if (body.state_id !== undefined) {
         const v = toOptUuid(body.state_id);
-        if (v === undefined) delete body.state_id; else body.state_id = v;
+        if (v === undefined) delete body.state_id;
+        else body.state_id = v;
       }
       if (body.country_id !== undefined) body.country_id = toOptInt(body.country_id);
       if (body.no_of_users !== undefined) body.no_of_users = toOptInt(body.no_of_users);
@@ -414,15 +419,18 @@ adminRouter.post(
       // Coerce optionals from multipart strings safely
       if (body.company_id !== undefined) {
         const v = toOptUuid(body.company_id);
-        if (v === undefined) delete body.company_id; else body.company_id = v;
+        if (v === undefined) delete body.company_id;
+        else body.company_id = v;
       }
       if (body.subscription_id !== undefined) {
         const v = toOptUuid(body.subscription_id);
-        if (v === undefined) delete body.subscription_id; else body.subscription_id = v;
+        if (v === undefined) delete body.subscription_id;
+        else body.subscription_id = v;
       }
       if (body.state_id !== undefined) {
         const v = toOptUuid(body.state_id);
-        if (v === undefined) delete body.state_id; else body.state_id = v;
+        if (v === undefined) delete body.state_id;
+        else body.state_id = v;
       }
       if (body.country_id !== undefined) body.country_id = toOptInt(body.country_id);
       if (body.no_of_users !== undefined) body.no_of_users = toOptInt(body.no_of_users);
@@ -586,38 +594,51 @@ adminRouter.post(
   }
 );
 
-adminRouter.put(
-  "/users/:id",
-  (req, res, next) => {
-    const type = String(req.headers["content-type"] || "").toLowerCase();
-    if (!type.includes("multipart/form-data")) return next();
+adminRouter.put("/users/:id", (req, res, next) => {
+  const type = String(req.headers["content-type"] || "").toLowerCase();
+  if (!type.includes("multipart/form-data")) return next();
 
-    const parser = upload.fields([
-      { name: "photo", maxCount: 1 },
-      { name: "kyc", maxCount: 1 },
-      { name: "proof", maxCount: 1 },
-    ]);
+  const parser = upload.fields([
+    { name: "photo", maxCount: 1 },
+    { name: "kyc", maxCount: 1 },
+    { name: "proof", maxCount: 1 },
+  ]);
 
-    parser(req, res, async (err) => {
-      if (err) {
-        if (err.code === "LIMIT_UNEXPECTED_FILE") {
-          const fileErr = new Error("Only photo or KYC uploads are allowed");
-          fileErr.status = 400;
-          return next(fileErr);
-        }
-        return next(err);
+  parser(req, res, async (err) => {
+    if (err) {
+      if (err.code === "LIMIT_UNEXPECTED_FILE") {
+        const fileErr = new Error("Only photo or KYC uploads are allowed");
+        fileErr.status = 400;
+        return next(fileErr);
       }
+      return next(err);
+    }
 
-      try {
-        await attachUserUploads(req, req.body);
-        return next();
-      } catch (uploadErr) {
-        return next(uploadErr);
-      }
-    });
+    try {
+      await attachUserUploads(req, req.body);
+      return next();
+    } catch (uploadErr) {
+      return next(uploadErr);
+    }
+  });
+});
+// Pre-upload middleware then delegate to CRUD create for validations
+adminRouter.post("/vendors", upload.single("photo"), async (req, _res, next) => {
+  try {
+    if (req.file) {
+      const up = await uploadBufferToS3({
+        buffer: req.file.buffer,
+        filename: req.file.originalname,
+        contentType: req.file.mimetype,
+        keyPrefix: process.env.S3_KEY_PREFIX_VENDOR_PHOTO || "uploads/vendor/photo/",
+      });
+      req.body.photo = up.url;
+    }
+    return next();
+  } catch (e) {
+    return next(e);
   }
-);
-
+});
 /* ======================= VENDORS (org-scoped; company REQUIRED) ======================= */
 adminRouter.use(
   "/vendors",
@@ -740,27 +761,6 @@ adminRouter.use(
  *       201:
  *         description: Created vendor
  */
-// Pre-upload middleware then delegate to CRUD create for validations
-adminRouter.post(
-  "/vendors",
-  upload.single("photo"),
-  async (req, _res, next) => {
-    try {
-      if (req.file) {
-        const up = await uploadBufferToS3({
-          buffer: req.file.buffer,
-          filename: req.file.originalname,
-          contentType: req.file.mimetype,
-          keyPrefix: process.env.S3_KEY_PREFIX_VENDOR_PHOTO || "uploads/vendor/photo/",
-        });
-        req.body.photo = up.url;
-      }
-      return next();
-    } catch (e) {
-      return next(e);
-    }
-  }
-);
 
 /* ======================= USERS (org-scoped) ======================= */
 /* Listing users: ALWAYS restrict to roles 'supervisor' & 'technician' */
@@ -917,7 +917,9 @@ adminRouter.use(
           err.field = "supervisor_id";
           throw err;
         }
-        const supervisor = await User.findOne({ where: { user_id: body.supervisor_id, company_id: companyId } });
+        const supervisor = await User.findOne({
+          where: { user_id: body.supervisor_id, company_id: companyId },
+        });
         if (!supervisor) {
           const err = new Error("supervisor_id does not exist or is not in the same company");
           err.status = 400;
@@ -947,7 +949,9 @@ adminRouter.use(
       }
       // Optional: validate supervisor_id (must be in same company)
       if (body.supervisor_id) {
-        const supervisor = await User.findOne({ where: { user_id: body.supervisor_id, company_id: companyId } });
+        const supervisor = await User.findOne({
+          where: { user_id: body.supervisor_id, company_id: companyId },
+        });
         if (!supervisor) {
           const err = new Error("supervisor_id does not exist or is not in the same company");
           err.status = 400;
@@ -967,7 +971,9 @@ adminRouter.use(
       }
       // Optional: validate region_ids array
       if (Array.isArray(body.region_ids) && body.region_ids.length) {
-        const regions = await Region.findAll({ where: { region_id: { [Op.in]: body.region_ids } } });
+        const regions = await Region.findAll({
+          where: { region_id: { [Op.in]: body.region_ids } },
+        });
         if (regions.length !== body.region_ids.length) {
           const err = new Error("One or more region_ids do not exist");
           err.status = 400;
@@ -1010,7 +1016,9 @@ adminRouter.use(
               err.status = 400;
               throw err;
             }
-            const supervisor = await User.findOne({ where: { user_id: supervisorId, company_id: row.company_id } });
+            const supervisor = await User.findOne({
+              where: { user_id: supervisorId, company_id: row.company_id },
+            });
             if (!supervisor) {
               const err = new Error("supervisor_id does not exist or is not in the same company");
               err.status = 400;
@@ -1114,22 +1122,18 @@ adminRouter.post(
 );
 
 /* ======================= CLIENTS (org-scoped; company required) ======================= */
-adminRouter.post(
-  "/clients",
-  upload.single("photo"),
-  async (req, _res, next) => {
-    try {
-      await attachUserUploads(req, req.body, {
-        photoPrefixEnv: "S3_KEY_PREFIX_CLIENT_PHOTO",
-        photoDefaultPrefix: "uploads/client/photo/",
-        includeDoc: false,
-      });
-      return next();
-    } catch (e) {
-      return next(e);
-    }
+adminRouter.post("/clients", upload.single("photo"), async (req, _res, next) => {
+  try {
+    await attachUserUploads(req, req.body, {
+      photoPrefixEnv: "S3_KEY_PREFIX_CLIENT_PHOTO",
+      photoDefaultPrefix: "uploads/client/photo/",
+      includeDoc: false,
+    });
+    return next();
+  } catch (e) {
+    return next(e);
   }
-);
+});
 
 adminRouter.use(
   "/clients",
@@ -1150,12 +1154,14 @@ adminRouter.use(
 
       // Coerce IDs and numeric/boolean fields
       if (body.company_id !== undefined) body.company_id = toOptUuid(body.company_id);
-      if (body.business_typeId !== undefined) body.business_typeId = toOptUuid(body.business_typeId);
+      if (body.business_typeId !== undefined)
+        body.business_typeId = toOptUuid(body.business_typeId);
       if (body.state_id !== undefined) body.state_id = toOptUuid(body.state_id);
       if (body.country_id !== undefined) body.country_id = toOptInt(body.country_id);
       if (body.lat !== undefined) body.lat = toOptFloat(body.lat);
       if (body.lng !== undefined) body.lng = toOptFloat(body.lng);
-      if (body.available_status !== undefined) body.available_status = toOptBool(body.available_status);
+      if (body.available_status !== undefined)
+        body.available_status = toOptBool(body.available_status);
       if (body.visiting_startTime === "") delete body.visiting_startTime;
       if (body.visiting_endTime === "") delete body.visiting_endTime;
     },
@@ -1247,7 +1253,9 @@ adminRouter.get(
 
       const { rows, count } = await Attendance.findAndCountAll({
         where,
-        include: [{ model: User, as: "user", attributes: ["user_id", "name", "email", "phone", "photo"] }],
+        include: [
+          { model: User, as: "user", attributes: ["user_id", "name", "email", "phone", "photo"] },
+        ],
         order: [["check_in_at", order]],
         limit,
         offset,
@@ -1289,57 +1297,59 @@ adminRouter.get(
  *       200:
  *         description: Summary rows
  */
-adminRouter.get(
-  "/attendance/summary",
-  rbac("Attendance", "view"),
-  async (req, res, next) => {
-    try {
-      const isSuper = req.user?.role_slug === "super_admin";
-      const where = {};
-      if (!isSuper) where.company_id = req.user?.company_id;
-      if (req.query.company_id && isSuper) where.company_id = String(req.query.company_id);
-      if (req.query.user_id) where.user_id = String(req.query.user_id);
-      if (req.query.from || req.query.to) {
-        where.check_in_at = {};
-        if (req.query.from) where.check_in_at[Op.gte] = new Date(req.query.from);
-        if (req.query.to) where.check_in_at[Op.lte] = new Date(req.query.to);
-      }
+adminRouter.get("/attendance/summary", rbac("Attendance", "view"), async (req, res, next) => {
+  try {
+    const isSuper = req.user?.role_slug === "super_admin";
+    const where = {};
+    if (!isSuper) where.company_id = req.user?.company_id;
+    if (req.query.company_id && isSuper) where.company_id = String(req.query.company_id);
+    if (req.query.user_id) where.user_id = String(req.query.user_id);
+    if (req.query.from || req.query.to) {
+      where.check_in_at = {};
+      if (req.query.from) where.check_in_at[Op.gte] = new Date(req.query.from);
+      if (req.query.to) where.check_in_at[Op.lte] = new Date(req.query.to);
+    }
 
-      const groupBy = String(req.query.groupBy || "").toLowerCase();
-      if (!["day", "user"].includes(groupBy)) {
-        return res.status(400).json({ message: "groupBy must be 'day' or 'user'" });
-      }
+    const groupBy = String(req.query.groupBy || "").toLowerCase();
+    if (!["day", "user"].includes(groupBy)) {
+      return res.status(400).json({ message: "groupBy must be 'day' or 'user'" });
+    }
 
-      if (groupBy === "day") {
-        const rows = await Attendance.findAll({
-          where,
-          attributes: [[fn("date_trunc", "day", col("check_in_at")), "day"], [fn("sum", col("total_minutes")), "total_minutes"]],
-          group: [fn("date_trunc", "day", col("check_in_at"))],
-          order: [[literal("day"), "ASC"]],
-          raw: true,
-        });
-        return res.json({ data: rows });
-      }
-
-      // group by user
+    if (groupBy === "day") {
       const rows = await Attendance.findAll({
         where,
-        attributes: ["user_id", [fn("sum", col("total_minutes")), "total_minutes"]],
-        group: ["user_id"],
+        attributes: [
+          [fn("date_trunc", "day", col("check_in_at")), "day"],
+          [fn("sum", col("total_minutes")), "total_minutes"],
+        ],
+        group: [fn("date_trunc", "day", col("check_in_at"))],
+        order: [[literal("day"), "ASC"]],
         raw: true,
       });
-
-      // join minimal user info
-      const userIds = rows.map((r) => r.user_id);
-      const users = await User.findAll({ where: { user_id: { [Op.in]: userIds } }, attributes: ["user_id", "name", "email", "photo"] });
-      const map = Object.fromEntries(users.map((u) => [u.user_id, u.toJSON ? u.toJSON() : u]));
-      const out = rows.map((r) => ({ ...r, user: map[r.user_id] || null }));
-      return res.json({ data: out });
-    } catch (e) {
-      next(e);
+      return res.json({ data: rows });
     }
+
+    // group by user
+    const rows = await Attendance.findAll({
+      where,
+      attributes: ["user_id", [fn("sum", col("total_minutes")), "total_minutes"]],
+      group: ["user_id"],
+      raw: true,
+    });
+
+    // join minimal user info
+    const userIds = rows.map((r) => r.user_id);
+    const users = await User.findAll({
+      where: { user_id: { [Op.in]: userIds } },
+      attributes: ["user_id", "name", "email", "photo"],
+    });
+    const map = Object.fromEntries(users.map((u) => [u.user_id, u.toJSON ? u.toJSON() : u]));
+    const out = rows.map((r) => ({ ...r, user: map[r.user_id] || null }));
+    return res.json({ data: out });
+  } catch (e) {
+    next(e);
   }
-);
+});
 
 /**
  * @openapi
@@ -1375,23 +1385,19 @@ adminRouter.get(
  *       201:
  *         description: Created client
  */
-adminRouter.post(
-  "/clients",
-  upload.single("photo"),
-  async (req, _res, next) => {
-    try {
-      if (req.file) {
-        const up = await uploadBufferToS3({
-          buffer: req.file.buffer,
-          filename: req.file.originalname,
-          contentType: req.file.mimetype,
-          keyPrefix: process.env.S3_KEY_PREFIX_CLIENT_PHOTO || "uploads/client/photo/",
-        });
-        req.body.photo = up.url;
-      }
-      return next();
-    } catch (e) {
-      return next(e);
+adminRouter.post("/clients", upload.single("photo"), async (req, _res, next) => {
+  try {
+    if (req.file) {
+      const up = await uploadBufferToS3({
+        buffer: req.file.buffer,
+        filename: req.file.originalname,
+        contentType: req.file.mimetype,
+        keyPrefix: process.env.S3_KEY_PREFIX_CLIENT_PHOTO || "uploads/client/photo/",
+      });
+      req.body.photo = up.url;
     }
+    return next();
+  } catch (e) {
+    return next(e);
   }
-);
+});
