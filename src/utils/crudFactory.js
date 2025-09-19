@@ -1,16 +1,38 @@
 // src/routes/buildCrudRoutes.js
 import express from "express";
+import multer from "multer";
 import { buildWhere } from "./filters.js";
 import { parseListQuery } from "../middleware/pagination.js";
 import { rbac } from "../middleware/rbac.js";
 
 /* -------------------- DB error helpers -------------------- */
-function isUniqueError(err) {
-  return (
-    err?.name === "SequelizeUniqueConstraintError" ||
-    err?.original?.code === "23505" ||
-    err?.parent?.code === "23505"
-  );
+export function isUniqueError(err) {
+  if (err?.name === "SequelizeUniqueConstraintError") return true;
+
+  const codes = [err?.original?.code, err?.parent?.code, err?.code];
+  if (codes.some((code) => String(code || "").trim() === "23505")) return true;
+
+  if (Array.isArray(err?.errors)) {
+    const hasUniqueValidator = err.errors.some((item) => {
+      const key = String(item?.validatorKey || item?.type || item?.origin || "").toLowerCase();
+      return key.includes("unique");
+    });
+    if (hasUniqueValidator) return true;
+  }
+
+  const constraint = String(err?.constraint || err?.original?.constraint || "").toLowerCase();
+  if (constraint.includes("unique")) return true;
+
+  const routines = [err?.routine, err?.original?.routine, err?.parent?.routine];
+  if (routines.some((routine) => String(routine || "").toLowerCase() === "unique_violation")) return true;
+
+  const detail = String(err?.original?.detail || err?.detail || "").toLowerCase();
+  if (detail.includes("already exists") || detail.includes("is not unique")) return true;
+
+  const messages = [err?.message, err?.original?.message, err?.parent?.message];
+  if (messages.some((msg) => String(msg || "").toLowerCase().includes("duplicate key value"))) return true;
+
+  return false;
 }
 function isFkError(err) {
   return (
@@ -21,6 +43,88 @@ function isFkError(err) {
 }
 function isValidationError(err) {
   return err?.name === "SequelizeValidationError";
+}
+
+function formatFieldLabel(field) {
+  if (!field) return "Field";
+  const clean = String(field).trim();
+  if (!clean) return "Field";
+  const spaced = clean.replace(/_/g, " ");
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
+}
+
+export function buildUniqueErrorPayload(err, model) {
+  const entityRaw = model?.options?.name?.singular || model?.name || model?.tableName || "Record";
+  const entity = formatFieldLabel(entityRaw);
+  const items = Array.isArray(err?.errors) ? err.errors : [];
+  const fields = {};
+  let firstKey;
+
+  for (const item of items) {
+    const key = item?.path || item?.column || item?.value?.path;
+    if (!key) continue;
+    if (!firstKey) firstKey = key;
+    const label = formatFieldLabel(key);
+    fields[key] = `${label} already exists`;
+  }
+
+  if (!firstKey && err?.fields && typeof err.fields === "object") {
+    for (const key of Object.keys(err.fields)) {
+      if (!key) continue;
+      if (!firstKey) firstKey = key;
+      const label = formatFieldLabel(key);
+      fields[key] = `${label} already exists`;
+    }
+  }
+
+  if (!firstKey) {
+    const detail = String(err?.original?.detail || err?.detail || "");
+    const match = detail.match(/\(([^)]+)\)=/);
+    if (match?.[1]) {
+      firstKey = match[1];
+      const label = formatFieldLabel(firstKey);
+      fields[firstKey] = `${label} already exists`;
+    }
+  }
+
+  if (!firstKey) {
+    const constraint = String(err?.constraint || err?.original?.constraint || "");
+    const match = constraint.match(/(?:^|[_\.])([a-z0-9]+)_key/i);
+    if (match?.[1]) {
+      firstKey = match[1];
+      const label = formatFieldLabel(firstKey);
+      fields[firstKey] = `${label} already exists`;
+    }
+  }
+
+  const label = formatFieldLabel(firstKey);
+  const message = firstKey ? `${entity} already exists with this ${label.toLowerCase()}` : `${entity} already exists`;
+
+  const payload = { message };
+  if (Object.keys(fields).length) payload.fields = fields;
+  return payload;
+}
+
+export function buildFkErrorPayload(err, model) {
+  const entityRaw = model?.options?.name?.singular || model?.name || model?.tableName || "Record";
+  const entity = formatFieldLabel(entityRaw);
+  const detail = String(err?.original?.detail || err?.detail || "");
+  const tableMatch = detail.match(/table "([^"]+)"/i);
+  const columnMatch = detail.match(/Key \(([^)]+)\)/i);
+  const tableLabel = tableMatch?.[1] ? formatFieldLabel(tableMatch[1]) : null;
+  const columnLabel = columnMatch?.[1] ? formatFieldLabel(columnMatch[1]) : null;
+
+  let reason = "referenced by other data";
+  if (tableLabel) {
+    reason = `referenced by ${tableLabel}`;
+    if (columnLabel) reason += ` via ${columnLabel.toLowerCase()}`;
+  }
+
+  const message = `${entity} cannot be deleted because it is ${reason}.`;
+
+  const payload = { message };
+  if (detail) payload.detail = detail;
+  return payload;
 }
 
 /* -------------------- Org-scope enforcement -------------------- */
@@ -90,6 +194,7 @@ function enforceOrgOwnership(model, req, body, { orgScoped, forbidChangeOnUpdate
  * - findExistingWhere  function(req)  (optional) idempotent POST lookup; omit to fail duplicates with 409
  * - orgScoped          boolean        enable company_id scoping/enforcement (default true)
  * - listWhere          (async) function(req) -> whereClause  // extra list filter (e.g. role-based)
+ * - preDelete         async function(req, row)  cleanup before destroy
  */
 export function buildCrudRoutes({
   model,
@@ -104,11 +209,31 @@ export function buildCrudRoutes({
   findExistingWhere, // optional (leave undefined to strictly 409 on duplicates)
   orgScoped = true,
   listWhere, // <<< NEW
+  preDelete, // optional
 }) {
   if (!model) throw new Error("buildCrudRoutes: model is required");
   if (!screen) throw new Error("buildCrudRoutes: screen is required");
 
   const router = express.Router();
+  // Parse multipart form-data (without files) so FormData submissions retain fields
+  const multipartParser = multer().none();
+  router.use((req, res, next) => {
+    if (!["POST", "PUT", "PATCH"].includes(req.method)) return next();
+    const type = String(req.headers["content-type"] || "").toLowerCase();
+    if (!type.includes("multipart/form-data")) return next();
+
+    if (req.file || (req.files && Object.keys(req.files).length)) return next();
+
+    multipartParser(req, res, (err) => {
+      if (!err) return next();
+      if (err?.code === "LIMIT_UNEXPECTED_FILE") {
+        const fileErr = new Error("File uploads are not supported on this endpoint. Use the designated upload route.");
+        fileErr.status = 400;
+        return next(fileErr);
+      }
+      return next(err);
+    });
+  });
   const PK = model.primaryKeyAttribute || Object.keys(model.primaryKeys || {})[0] || "id";
 
   const orgScope = makeOrgScope(model, { orgScoped });
@@ -184,7 +309,8 @@ export function buildCrudRoutes({
             /* ignore */
           }
         }
-        return res.status(409).json({ message: `${model.name} already exists` });
+        const conflict = buildUniqueErrorPayload(e, model);
+        return res.status(409).json(conflict);
       }
       if (isValidationError(e)) {
         const items = e.errors || [];
@@ -236,7 +362,8 @@ export function buildCrudRoutes({
       return res.json(row);
     } catch (e) {
       if (isUniqueError(e)) {
-        return res.status(409).json({ message: `${model.name} already exists` });
+        const conflict = buildUniqueErrorPayload(e, model);
+        return res.status(409).json(conflict);
       }
       if (isValidationError(e)) {
         const items = e.errors || [];
@@ -274,13 +401,19 @@ export function buildCrudRoutes({
       const row = await model.findOne({ where });
       if (!row) return res.status(404).json({ message: "Not found" });
 
+      if (typeof preDelete === "function") {
+        const result = await preDelete(req, row);
+        if (result === false) {
+          return;
+        }
+      }
+
       await row.destroy();
       return res.json({ message: "Deleted" });
     } catch (e) {
       if (isFkError(e)) {
-        return res.status(409).json({
-          message: "Cannot delete: record is referenced by other data",
-        });
+        const conflict = buildFkErrorPayload(e, model);
+        return res.status(409).json(conflict);
       }
       return next(e);
     }
@@ -288,3 +421,5 @@ export function buildCrudRoutes({
 
   return router;
 }
+
+

@@ -67,6 +67,49 @@ function toOptUuid(v) {
   return s; // allow Sequelize to validate UUID format
 }
 
+async function attachUserUploads(
+  req,
+  body,
+  {
+    photoField = "photo",
+    photoPrefixEnv = "S3_KEY_PREFIX_USER_PHOTO",
+    photoDefaultPrefix = "uploads/user/photo/",
+    includeDoc = true,
+    docField = "proof",
+    docPrefixEnv = "S3_KEY_PREFIX_USER_KYC",
+    docDefaultPrefix = "uploads/user/kyc/",
+  } = {}
+) {
+  const files = req.files || {};
+  if (req.file && (!files.photo || !files.photo.length)) {
+    files.photo = [req.file];
+  }
+
+  if (files.photo?.[0]) {
+    const f = files.photo[0];
+    const { url } = await uploadBufferToS3({
+      buffer: f.buffer,
+      filename: f.originalname,
+      contentType: f.mimetype,
+      keyPrefix: process.env[photoPrefixEnv] || photoDefaultPrefix,
+    });
+    body[photoField] = url;
+  }
+
+  if (includeDoc) {
+    const docFile = files.kyc?.[0] || files.proof?.[0];
+    if (docFile) {
+      const { url } = await uploadBufferToS3({
+        buffer: docFile.buffer,
+        filename: docFile.originalname,
+        contentType: docFile.mimetype,
+        keyPrefix: process.env[docPrefixEnv] || docDefaultPrefix,
+      });
+      body[docField] = url;
+    }
+  }
+}
+
 /**
  * Pagination & filters supported (handled by crudFactory):
  * - ?page=1&limit=20               -> pagination
@@ -464,15 +507,11 @@ adminRouter.post(
         throw err;
       }
 
-      if (req.file) {
-        const up = await uploadBufferToS3({
-          buffer: req.file.buffer,
-          filename: req.file.originalname,
-          contentType: req.file.mimetype,
-          keyPrefix: process.env.S3_KEY_PREFIX_CLIENT_PHOTO || "uploads/client/photo/",
-        });
-        body.photo = up.url;
-      }
+      await attachUserUploads(req, body, {
+        photoPrefixEnv: "S3_KEY_PREFIX_CLIENT_PHOTO",
+        photoDefaultPrefix: "uploads/client/photo/",
+        includeDoc: false,
+      });
 
       const created = await Client.create(body);
       res.status(201).json(created);
@@ -537,32 +576,45 @@ adminRouter.post(
         throw err;
       }
 
-      if (req.files?.photo?.[0]) {
-        const f = req.files.photo[0];
-        const up = await uploadBufferToS3({
-          buffer: f.buffer,
-          filename: f.originalname,
-          contentType: f.mimetype,
-          keyPrefix: process.env.S3_KEY_PREFIX_USER_PHOTO || "uploads/user/photo/",
-        });
-        body.photo = up.url;
-      }
-      if (req.files?.kyc?.[0]) {
-        const f = req.files.kyc[0];
-        const up = await uploadBufferToS3({
-          buffer: f.buffer,
-          filename: f.originalname,
-          contentType: f.mimetype,
-          keyPrefix: process.env.S3_KEY_PREFIX_USER_KYC || "uploads/user/kyc/",
-        });
-        body.proof = up.url;
-      }
+      await attachUserUploads(req, body);
 
       const created = await User.create(body);
       res.status(201).json(created);
     } catch (e) {
       next(e);
     }
+  }
+);
+
+adminRouter.put(
+  "/users/:id",
+  (req, res, next) => {
+    const type = String(req.headers["content-type"] || "").toLowerCase();
+    if (!type.includes("multipart/form-data")) return next();
+
+    const parser = upload.fields([
+      { name: "photo", maxCount: 1 },
+      { name: "kyc", maxCount: 1 },
+      { name: "proof", maxCount: 1 },
+    ]);
+
+    parser(req, res, async (err) => {
+      if (err) {
+        if (err.code === "LIMIT_UNEXPECTED_FILE") {
+          const fileErr = new Error("Only photo or KYC uploads are allowed");
+          fileErr.status = 400;
+          return next(fileErr);
+        }
+        return next(err);
+      }
+
+      try {
+        await attachUserUploads(req, req.body);
+        return next();
+      } catch (uploadErr) {
+        return next(uploadErr);
+      }
+    });
   }
 );
 
@@ -648,6 +700,9 @@ adminRouter.use(
     preUpdate: async (_req, body) => {
       if (body.company_id) delete body.company_id; // never move tenant
     },
+    preDelete: async (_req, row) => {
+      await User.update({ supervisor_id: null }, { where: { supervisor_id: row.user_id } });
+    },
   })
 );
 
@@ -709,6 +764,23 @@ adminRouter.post(
 
 /* ======================= USERS (org-scoped) ======================= */
 /* Listing users: ALWAYS restrict to roles 'supervisor' & 'technician' */
+adminRouter.post(
+  "/users",
+  upload.fields([
+    { name: "photo", maxCount: 1 },
+    { name: "kyc", maxCount: 1 },
+    { name: "proof", maxCount: 1 },
+  ]),
+  async (req, _res, next) => {
+    try {
+      await attachUserUploads(req, req.body);
+      return next();
+    } catch (e) {
+      return next(e);
+    }
+  }
+);
+
 adminRouter.use(
   "/users",
   buildCrudRoutes({
@@ -1042,6 +1114,23 @@ adminRouter.post(
 );
 
 /* ======================= CLIENTS (org-scoped; company required) ======================= */
+adminRouter.post(
+  "/clients",
+  upload.single("photo"),
+  async (req, _res, next) => {
+    try {
+      await attachUserUploads(req, req.body, {
+        photoPrefixEnv: "S3_KEY_PREFIX_CLIENT_PHOTO",
+        photoDefaultPrefix: "uploads/client/photo/",
+        includeDoc: false,
+      });
+      return next();
+    } catch (e) {
+      return next(e);
+    }
+  }
+);
+
 adminRouter.use(
   "/clients",
   buildCrudRoutes({
