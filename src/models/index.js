@@ -66,6 +66,13 @@ Company.belongsTo(State, { foreignKey: "state_id" });
 
 Vendor.belongsTo(Company, { foreignKey: "company_id" });
 Vendor.belongsTo(Role, { foreignKey: "role_id" });
+Vendor.belongsTo(Region, {
+  as: "region_obj",
+  foreignKey: { name: "region_id", allowNull: true },
+  targetKey: "region_id",
+  onDelete: "SET NULL", // recommended
+  onUpdate: "CASCADE",
+});
 
 Client.belongsTo(Company, { foreignKey: "company_id" });
 Client.belongsTo(BusinessType, { foreignKey: "business_typeId" });

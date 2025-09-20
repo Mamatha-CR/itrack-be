@@ -24,13 +24,21 @@ export function isUniqueError(err) {
   if (constraint.includes("unique")) return true;
 
   const routines = [err?.routine, err?.original?.routine, err?.parent?.routine];
-  if (routines.some((routine) => String(routine || "").toLowerCase() === "unique_violation")) return true;
+  if (routines.some((routine) => String(routine || "").toLowerCase() === "unique_violation"))
+    return true;
 
   const detail = String(err?.original?.detail || err?.detail || "").toLowerCase();
   if (detail.includes("already exists") || detail.includes("is not unique")) return true;
 
   const messages = [err?.message, err?.original?.message, err?.parent?.message];
-  if (messages.some((msg) => String(msg || "").toLowerCase().includes("duplicate key value"))) return true;
+  if (
+    messages.some((msg) =>
+      String(msg || "")
+        .toLowerCase()
+        .includes("duplicate key value")
+    )
+  )
+    return true;
 
   return false;
 }
@@ -98,7 +106,9 @@ export function buildUniqueErrorPayload(err, model) {
   }
 
   const label = formatFieldLabel(firstKey);
-  const message = firstKey ? `${entity} already exists with this ${label.toLowerCase()}` : `${entity} already exists`;
+  const message = firstKey
+    ? `${entity} already exists with this ${label.toLowerCase()}`
+    : `${entity} already exists`;
 
   const payload = { message };
   if (Object.keys(fields).length) payload.fields = fields;
@@ -210,6 +220,10 @@ export function buildCrudRoutes({
   orgScoped = true,
   listWhere, // <<< NEW
   preDelete, // optional
+  listInclude, // NEW
+  viewInclude, // NEW
+  listAttributes, // NEW
+  viewAttributes, // NEW
 }) {
   if (!model) throw new Error("buildCrudRoutes: model is required");
   if (!screen) throw new Error("buildCrudRoutes: screen is required");
@@ -227,7 +241,9 @@ export function buildCrudRoutes({
     multipartParser(req, res, (err) => {
       if (!err) return next();
       if (err?.code === "LIMIT_UNEXPECTED_FILE") {
-        const fileErr = new Error("File uploads are not supported on this endpoint. Use the designated upload route.");
+        const fileErr = new Error(
+          "File uploads are not supported on this endpoint. Use the designated upload route."
+        );
         fileErr.status = 400;
         return next(fileErr);
       }
@@ -258,13 +274,22 @@ export function buildCrudRoutes({
       const attrs = model.getAttributes ? model.getAttributes() : {};
       const sortField = attrs?.[sortBy] ? sortBy : PK;
 
-      const { rows, count } = await model.findAndCountAll({
+      // build options, enabling include/attributes if provided
+      const listOpts = {
         where,
         limit,
         offset,
         order: [[sortField, order]],
-      });
+      };
+      if (listInclude) {
+        listOpts.include = listInclude;
+        listOpts.distinct = true; // avoid inflated counts when joining
+      }
+      if (listAttributes) {
+        listOpts.attributes = listAttributes;
+      }
 
+      const { rows, count } = await model.findAndCountAll(listOpts);
       return res.json({ data: rows, page, limit, total: count });
     } catch (e) {
       return next(e);
@@ -275,7 +300,12 @@ export function buildCrudRoutes({
   router.get("/:id", rbac(screen, "view"), orgScope, async (req, res, next) => {
     try {
       const where = { [PK]: req.params.id, ...(req.scopeWhere || {}) };
-      const row = await model.findOne({ where });
+
+      const viewOpts = { where };
+      if (viewInclude) viewOpts.include = viewInclude;
+      if (viewAttributes) viewOpts.attributes = viewAttributes;
+
+      const row = await model.findOne(viewOpts);
       if (!row) return res.status(404).json({ message: "Not found" });
       return res.json(row);
     } catch (e) {
@@ -317,13 +347,16 @@ export function buildCrudRoutes({
         const mapField = (path, validatorKey, value, defaultMsg) => {
           const v = value == null ? "" : String(value).trim();
           const lower = String(path || "").toLowerCase();
-          const cap = (s) => s ? s.charAt(0).toUpperCase() + s.slice(1).replace(/_/g, " ") : "Field";
+          const cap = (s) =>
+            s ? s.charAt(0).toUpperCase() + s.slice(1).replace(/_/g, " ") : "Field";
           if (/notnull/i.test(validatorKey || "")) return `${cap(lower)} is required`;
           if (lower === "email") return v ? "Invalid email" : "Email is required";
           if (lower === "phone") return v ? "Invalid phone" : "Phone is required";
           return defaultMsg || `Invalid ${cap(lower)}`;
         };
-        const errors = items.map((it) => mapField(it.path, it.validatorKey || it.type, it.value, it.message));
+        const errors = items.map((it) =>
+          mapField(it.path, it.validatorKey || it.type, it.value, it.message)
+        );
         const fields = Object.fromEntries(
           items.map((it) => [
             it.path,
@@ -370,13 +403,16 @@ export function buildCrudRoutes({
         const mapField = (path, validatorKey, value, defaultMsg) => {
           const v = value == null ? "" : String(value).trim();
           const lower = String(path || "").toLowerCase();
-          const cap = (s) => s ? s.charAt(0).toUpperCase() + s.slice(1).replace(/_/g, " ") : "Field";
+          const cap = (s) =>
+            s ? s.charAt(0).toUpperCase() + s.slice(1).replace(/_/g, " ") : "Field";
           if (/notnull/i.test(validatorKey || "")) return `${cap(lower)} is required`;
           if (lower === "email") return v ? "Invalid email" : "Email is required";
           if (lower === "phone") return v ? "Invalid phone" : "Phone is required";
           return defaultMsg || `Invalid ${cap(lower)}`;
         };
-        const errors = items.map((it) => mapField(it.path, it.validatorKey || it.type, it.value, it.message));
+        const errors = items.map((it) =>
+          mapField(it.path, it.validatorKey || it.type, it.value, it.message)
+        );
         const fields = Object.fromEntries(
           items.map((it) => [
             it.path,
@@ -421,5 +457,3 @@ export function buildCrudRoutes({
 
   return router;
 }
-
-

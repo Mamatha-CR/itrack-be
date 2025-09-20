@@ -384,6 +384,18 @@ adminRouter.use(
     exactFields: ["country_id", "state_id", "subscription_id", "status"],
     statusFieldName: "status",
     orgScoped: false, // not tenant-scoped; only super_admin should have this screen
+    preDelete: async (_req, row) => {
+      // delete dependents explicitly
+      await Promise.all([
+        WorkType.destroy({ where: { company_id: row.company_id }, individualHooks: true }),
+        JobType.destroy({ where: { company_id: row.company_id }, individualHooks: true }),
+        Region.destroy({ where: { company_id: row.company_id }, individualHooks: true }),
+        Shift.destroy({ where: { company_id: row.company_id }, individualHooks: true }),
+        Vendor.destroy({ where: { company_id: row.company_id }, individualHooks: true }),
+        User.destroy({ where: { company_id: row.company_id }, individualHooks: true }),
+        Client.destroy({ where: { company_id: row.company_id }, individualHooks: true }),
+      ]);
+    },
     normalize: (body) => {
       if (typeof body.name === "string") body.name = body.name.trim();
       if (typeof body.email === "string") body.email = body.email.trim().toLowerCase();
@@ -639,6 +651,7 @@ adminRouter.post("/vendors", upload.single("photo"), async (req, _res, next) => 
     return next(e);
   }
 });
+
 /* ======================= VENDORS (org-scoped; company REQUIRED) ======================= */
 adminRouter.use(
   "/vendors",
@@ -660,6 +673,31 @@ adminRouter.use(
       if (body.region_id !== undefined) body.region_id = toOptUuid(body.region_id);
       if (body.state_id !== undefined) body.state_id = toOptUuid(body.state_id);
       if (body.country_id !== undefined) body.country_id = toOptInt(body.country_id);
+    },
+
+    listInclude: [
+      { model: Company, attributes: ["company_id", "name"] }, // alias "Company"
+      { model: Role, attributes: ["role_id", "role_name", "role_slug"] }, // alias "Role"
+    ],
+    listAttributes: {
+      exclude: ["password"],
+      include: [
+        [col("Company.name"), "company_name"],
+        [col("Role.role_name"), "role_name"],
+      ],
+    },
+
+    // GET /vendors/:id enrichment
+    viewInclude: [
+      { model: Company, attributes: ["company_id", "name", "email", "phone"] },
+      { model: Role, attributes: ["role_id", "role_name", "role_slug"] },
+    ],
+    viewAttributes: {
+      exclude: ["password"],
+      include: [
+        [col("Company.name"), "company_name"],
+        [col("Role.role_name"), "role_name"],
+      ],
     },
     // company required (super_admin must pass; org users auto-filled)
     preCreate: async (req, body) => {
@@ -722,7 +760,9 @@ adminRouter.use(
       if (body.company_id) delete body.company_id; // never move tenant
     },
     preDelete: async (_req, row) => {
-      await User.update({ supervisor_id: null }, { where: { supervisor_id: row.user_id } });
+      await Promise.all([
+        User.destroy({ where: { vendor_id: row.vendor_id }, individualHooks: true }),
+      ]);
     },
   })
 );
@@ -1036,6 +1076,11 @@ adminRouter.use(
         }
       }
       if (body.company_id) delete body.company_id; // never allow tenant change
+    },
+    preDelete: async (_req, row) => {
+      await Promise.all([
+        User.destroy({ where: { supervisor_id: row.supervisor_id }, individualHooks: true }),
+      ]);
     },
   })
 );
