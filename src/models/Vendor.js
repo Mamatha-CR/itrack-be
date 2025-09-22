@@ -9,6 +9,7 @@ export default (sequelize) => {
       company_id: { type: DataTypes.UUID, allowNull: false }, // must belong to a company
       vendor_name: { type: DataTypes.STRING, allowNull: false },
       photo: DataTypes.STRING,
+      address_1: DataTypes.STRING,
       email: { type: DataTypes.STRING, allowNull: false, validate: { isEmail: true } },
       phone: { type: DataTypes.STRING, allowNull: false },
       password: { type: DataTypes.STRING, allowNull: false },
@@ -18,6 +19,8 @@ export default (sequelize) => {
       postal_code: DataTypes.STRING,
       role_id: DataTypes.UUID,
       region_id: DataTypes.UUID,
+      city: DataTypes.STRING,
+      status: { type: DataTypes.BOOLEAN, defaultValue: true },
     },
     {
       hooks: {
