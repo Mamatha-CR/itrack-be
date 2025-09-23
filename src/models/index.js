@@ -82,6 +82,7 @@ User.belongsTo(Role, { foreignKey: "role_id" });
 User.belongsTo(User, { as: "supervisor", foreignKey: "supervisor_id" });
 User.belongsTo(Vendor, { foreignKey: "vendor_id" });
 User.belongsTo(Shift, { foreignKey: "shift_id" });
+User.belongsTo(Region, { foreignKey: "region_id", as: "region" });
 
 Job.belongsTo(Company, { foreignKey: "company_id" });
 Job.belongsTo(Client, { foreignKey: "client_id", as: "client" });

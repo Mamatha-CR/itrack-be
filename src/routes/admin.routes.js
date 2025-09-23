@@ -860,6 +860,40 @@ adminRouter.use(
       }
     },
 
+    listInclude: [
+      { model: Company, attributes: ["company_id", "name"] }, // alias "Company"
+      { model: Role, attributes: ["role_id", "role_name", "role_slug"] }, // alias "Role"
+      { model: Region, as: "region", attributes: ["region_id", "region_name"] },
+    ],
+    listAttributes: {
+      exclude: ["password"],
+      include: [
+        [col("Company.name"), "company_name"],
+        [col("Role.role_name"), "role_name"],
+        [col("region.region_name"), "region_name"],
+      ],
+    },
+
+    viewInclude: [
+      { model: Company, attributes: ["company_id", "name"] },
+      { model: Role, attributes: ["role_id", "role_name", "role_slug"] },
+      { model: Vendor, attributes: ["vendor_id", "vendor_name"] },
+      { model: Shift, attributes: ["shift_id", "shift_name"] },
+      { model: Region, as: "region", attributes: ["region_id", "region_name"] },
+      { model: User, as: "supervisor", attributes: ["user_id", "name"] },
+    ],
+    viewAttributes: {
+      exclude: ["password"],
+      include: [
+        [col("Company.name"), "company_name"],
+        [col("Role.role_name"), "role_name"],
+        [col("Vendor.vendor_name"), "vendor_name"],
+        [col("Shift.shift_name"), "shift_name"],
+        [col("region.region_name"), "region_name"],
+        [col("supervisor.name"), "supervisor_name"],
+      ],
+    },
+
     // 🔒 List hook: only show Supervisor + Technician
     listWhere: async () => {
       const roles = await Role.findAll({

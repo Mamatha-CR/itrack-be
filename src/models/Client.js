@@ -22,6 +22,7 @@ export default (sequelize) =>
       visiting_startTime: DataTypes.TIME,
       visiting_endTime: DataTypes.TIME,
       available_status: { type: DataTypes.BOOLEAN, defaultValue: true },
+      status: { type: DataTypes.BOOLEAN, defaultValue: true },
     },
     {
       hooks: {

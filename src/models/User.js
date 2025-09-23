@@ -24,6 +24,7 @@ export default (sequelize) => {
       shift_id: { type: DataTypes.UUID },
       proof: { type: DataTypes.STRING },
       role_id: { type: DataTypes.UUID },
+      status: { type: DataTypes.BOOLEAN, defaultValue: true },
     },
     {
       hooks: {
