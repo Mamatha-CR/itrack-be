@@ -1875,81 +1875,50 @@
  *     parameters:
  *       - in: query
  *         name: searchParam
- *         schema:
- *           type: string
+ *         schema: { type: string }
  *         description: Fuzzy search on reference_number.
  *       - in: query
  *         name: client_id
- *         schema:
- *           type: string
- *           format: uuid
+ *         schema: { type: string, format: uuid }
  *       - in: query
  *         name: worktype_id
- *         schema:
- *           type: string
- *           format: uuid
+ *         schema: { type: string, format: uuid }
  *       - in: query
  *         name: jobtype_id
- *         schema:
- *           type: string
- *           format: uuid
+ *         schema: { type: string, format: uuid }
  *       - in: query
  *         name: supervisor_id
- *         schema:
- *           type: string
- *           format: uuid
+ *         schema: { type: string, format: uuid }
  *       - in: query
  *         name: technician_id
- *         schema:
- *           type: string
- *           format: uuid
+ *         schema: { type: string, format: uuid }
  *       - in: query
  *         name: now_id
- *         schema:
- *           type: string
- *           format: uuid
+ *         schema: { type: string, format: uuid }
  *         description: Nature of work ID
  *       - in: query
  *         name: job_status_id
- *         schema:
- *           type: string
- *           format: uuid
+ *         schema: { type: string, format: uuid }
  *       - in: query
  *         name: from
- *         schema:
- *           type: string
- *           format: date-time
+ *         schema: { type: string, format: date-time }
  *         description: Include jobs with scheduledDateAndTime >= from (ISO 8601)
  *       - in: query
  *         name: to
- *         schema:
- *           type: string
- *           format: date-time
+ *         schema: { type: string, format: date-time }
  *         description: Include jobs with scheduledDateAndTime <= to (ISO 8601)
  *       - in: query
  *         name: page
- *         schema:
- *           type: integer
- *           minimum: 1
- *           default: 1
+ *         schema: { type: integer, minimum: 1, default: 1 }
  *       - in: query
  *         name: limit
- *         schema:
- *           type: integer
- *           minimum: 1
- *           maximum: 200
- *           default: 10
+ *         schema: { type: integer, minimum: 1, maximum: 200, default: 10 }
  *       - in: query
  *         name: sortBy
- *         schema:
- *           type: string
- *           example: createdAt
+ *         schema: { type: string, example: createdAt }
  *       - in: query
  *         name: order
- *         schema:
- *           type: string
- *           enum: [asc, desc]
- *           default: desc
+ *         schema: { type: string, enum: [asc, desc], default: desc }
  *     responses:
  *       200:
  *         description: OK
@@ -1960,14 +1929,10 @@
  *               properties:
  *                 data:
  *                   type: array
- *                   items:
- *                     type: object
- *                 page:
- *                   type: integer
- *                 limit:
- *                   type: integer
- *                 total:
- *                   type: integer
+ *                   items: { type: object }
+ *                 page: { type: integer }
+ *                 limit: { type: integer }
+ *                 total: { type: integer }
  *   post:
  *     tags:
  *       - Jobs
@@ -1988,52 +1953,20 @@
  *             type: object
  *             required: [client_id, supervisor_id, technician_id]
  *             properties:
- *               client_id:
- *                 type: string
- *                 format: uuid
- *               worktype_id:
- *                 type: string
- *                 format: uuid
- *               jobtype_id:
- *                 type: string
- *                 format: uuid
- *               supervisor_id:
- *                 type: string
- *                 format: uuid
- *               technician_id:
- *                 type: string
- *                 format: uuid
- *               now_id:
- *                 type: string
- *                 format: uuid
- *               job_status_id:
- *                 type: string
- *                 format: uuid
- *               estimated_days:
- *                 type: integer
- *                 minimum: 0
- *                 example: 0
- *               estimated_hours:
- *                 type: integer
- *                 minimum: 0
- *                 maximum: 23
- *                 example: 2
- *               estimated_minutes:
- *                 type: integer
- *                 minimum: 0
- *                 maximum: 59
- *                 example: 30
- *               estimated_duration:
- *                 type: integer
- *                 description: Total minutes (optional; computed if days/hours/minutes provided)
- *                 example: 150
- *               scheduledDateAndTime:
- *                 type: string
- *                 format: date-time
- *               reference_number:
- *                 type: string
- *               job_description:
- *                 type: string
+ *               client_id: { type: string, format: uuid }
+ *               worktype_id: { type: string, format: uuid }
+ *               jobtype_id: { type: string, format: uuid }
+ *               supervisor_id: { type: string, format: uuid }
+ *               technician_id: { type: string, format: uuid }
+ *               now_id: { type: string, format: uuid }
+ *               job_status_id: { type: string, format: uuid }
+ *               estimated_days: { type: integer, minimum: 0, example: 0 }
+ *               estimated_hours: { type: integer, minimum: 0, maximum: 23, example: 2 }
+ *               estimated_minutes: { type: integer, minimum: 0, maximum: 59, example: 30 }
+ *               estimated_duration: { type: integer, description: Total minutes (optional; computed if days/hours/minutes provided), example: 150 }
+ *               scheduledDateAndTime: { type: string, format: date-time }
+ *               reference_number: { type: string }
+ *               job_description: { type: string }
  *           examples:
  *             basic:
  *               value:
@@ -2049,22 +1982,21 @@
  *                 scheduledDateAndTime: "2025-08-20T10:30:00.000Z"
  *                 job_description: "AC not cooling — Check filter and gas level"
  *     responses:
- *       201:
- *         description: Created
+ *       201: { description: Created }
  * /jobs/{id}:
  *   get:
- *     tags:
- *       - Jobs
+ *     tags: [Jobs]
  *     summary: Get job (single object with embedded status_history)
- *     security:
- *       - bearerAuth: []
+ *     security: [ { bearerAuth: [] } ]
  *     parameters:
  *       - in: path
  *         name: id
  *         required: true
  *         schema:
  *           type: string
- *           format: uuid
+ *           example: "100042"
+ *           pattern: '^[0-9]+$'
+ *           description: Sequential numeric Job ID (string-encoded)
  *     responses:
  *       200:
  *         description: OK
@@ -2073,7 +2005,10 @@
  *             schema:
  *               type: object
  *               properties:
- *                 job_id: { type: string, format: uuid }
+ *                 job_id:
+ *                   type: string
+ *                   example: "100042"
+ *                   description: Sequential numeric Job ID (string-encoded)
  *                 client: { type: object }
  *                 technician: { type: object, description: Password excluded }
  *                 supervisor: { type: object, description: Password excluded }
@@ -2093,42 +2028,39 @@
  *                       is_completed: { type: boolean }
  *                       at: { type: string, format: date-time }
  *   put:
- *     tags:
- *       - Jobs
+ *     tags: [Jobs]
  *     summary: Update job (tracks status changes)
  *     description: If job_status_id changes, a new JobStatusHistory row is created.
- *     security:
- *       - bearerAuth: []
+ *     security: [ { bearerAuth: [] } ]
  *     parameters:
  *       - in: path
  *         name: id
  *         required: true
  *         schema:
  *           type: string
- *           format: uuid
+ *           example: "100042"
+ *           pattern: '^[0-9]+$'
+ *           description: Sequential numeric Job ID (string-encoded)
  *     requestBody:
  *       required: true
  *       content:
  *         application/json:
- *           schema:
- *             type: object
+ *           schema: { type: object }
  *     responses:
- *       200:
- *         description: OK
+ *       200: { description: OK }
  *   delete:
- *     tags:
- *       - Jobs
+ *     tags: [Jobs]
  *     summary: Delete job
- *     security:
- *       - bearerAuth: []
+ *     security: [ { bearerAuth: [] } ]
  *     parameters:
  *       - in: path
  *         name: id
  *         required: true
  *         schema:
  *           type: string
- *           format: uuid
+ *           example: "100042"
+ *           pattern: '^[0-9]+$'
+ *           description: Sequential numeric Job ID (string-encoded)
  *     responses:
- *       200:
- *         description: Deleted
+ *       200: { description: Deleted }
  */
