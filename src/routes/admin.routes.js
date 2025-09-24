@@ -1244,6 +1244,11 @@ adminRouter.use(
       if (body.visiting_startTime === "") delete body.visiting_startTime;
       if (body.visiting_endTime === "") delete body.visiting_endTime;
     },
+    viewInclude: [{ model: Company, attributes: ["company_id", "name"] }],
+    viewAttributes: {
+      exclude: ["password"],
+      include: [[col("Company.name"), "company_name"]],
+    },
     preCreate: async (req, body) => {
       // Required client fields
       if (isBlank(body.firstName)) {

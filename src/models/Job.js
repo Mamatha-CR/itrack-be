@@ -3,8 +3,13 @@ export default (sequelize) =>
   sequelize.define(
     "Job",
     {
-      // Use short numeric ID as primary key (min 6 digits, unique)
-      job_id: { type: DataTypes.BIGINT, primaryKey: true },
+      // Job model (keep job_id as UUID)
+      job_id: { type: DataTypes.UUID, primaryKey: true, defaultValue: DataTypes.UUIDV4 },
+      job_no: {
+        type: DataTypes.BIGINT,
+        unique: true,
+        defaultValue: sequelize.literal(`nextval('job_id_seq')`),
+      },
       company_id: { type: DataTypes.UUID },
       client_id: { type: DataTypes.UUID, allowNull: false },
       reference_number: { type: DataTypes.STRING, allowNull: false, unique: true },

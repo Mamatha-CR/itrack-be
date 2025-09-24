@@ -251,14 +251,6 @@ async function seedIndiaLocations() {
     district_id: chennai.district_id,
     pincode: "600006",
   });
-
-  console.log("\n=== Seeded Location IDs ===");
-  console.log("Country: India (91)");
-  console.log("State  : Andhra Pradesh =", andhra.state_id);
-  console.log("State  : Tamil Nadu     =", tamilnadu.state_id);
-  console.log("District: Chittoor      =", chittoor.district_id);
-  console.log("District: Chennai       =", chennai.district_id);
-  console.log("===========================\n");
 }
 
 /* ========================= Masters ========================= */
@@ -306,7 +298,10 @@ async function seedMasters() {
     { title: "Rejected", color: "#FF7878", order: 99 },
   ];
   // Normalize existing statuses and update or create accordingly
-  const normalize = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+  const normalize = (s) =>
+    String(s || "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "");
   const existing = await JobStatus.findAll();
   const map = Object.fromEntries(existing.map((r) => [normalize(r.job_status_title), r]));
   for (const js of jobStatuses) {
