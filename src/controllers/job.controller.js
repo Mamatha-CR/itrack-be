@@ -15,6 +15,7 @@ import {
   NatureOfWork,
   JobStatus,
   JobStatusHistory,
+  JobChat,
   Role,
   Region,
 } from "../models/index.js";
@@ -61,6 +62,19 @@ function ensureGranularDurationFields(obj) {
     if (!hasM) obj.estimated_minutes = m;
   }
   return obj;
+}
+
+function normalizeChatPayload(chat) {
+  if (!chat) return null;
+  const plain = chat?.toJSON ? chat.toJSON() : chat;
+  return {
+    id: plain.id,
+    user_id: plain.user_id,
+    user_name: plain.author?.name || null,
+    user_photo: plain.author?.photo || null,
+    message: plain.message,
+    sent_at: plain.createdAt,
+  };
 }
 
 /**
@@ -493,6 +507,72 @@ jobRouter.post("/", rbac("Manage Job", "add"), applyOrgScope, async (req, res, n
   }
 });
 
+jobRouter.get("/:id/chats", rbac("Manage Job", "view"), applyOrgScope, async (req, res, next) => {
+  try {
+    const id = /^\d+$/.test(String(req.params.id)) ? Number(req.params.id) : req.params.id;
+    const job = await Job.findOne({
+      where: { job_id: id, ...(req.scopeWhere || {}) },
+      attributes: ["job_id", "technician_id", "supervisor_id"],
+    });
+    if (!job) return res.status(404).json({ message: "Not found" });
+
+    const roleSlug = String(req.user?.role_slug || "").trim().toLowerCase();
+    const actorId = req.user?.sub || req.user?.user_id;
+    if (roleSlug === "technician" && actorId) {
+      const jobPlain = job?.toJSON ? job.toJSON() : job;
+      if (jobPlain.technician_id !== actorId && jobPlain.supervisor_id !== actorId) {
+        return res.status(404).json({ message: "Not found" });
+      }
+    }
+
+    const messages = await JobChat.findAll({
+      where: { job_id: job.job_id },
+      order: [["createdAt", "ASC"]],
+      attributes: ["id", "job_id", "user_id", "message", "createdAt"],
+      include: [{ model: User, as: "author", attributes: ["user_id", "name", "photo"] }],
+    });
+
+    res.json(messages.map((msg) => normalizeChatPayload(msg)).filter(Boolean));
+  } catch (e) {
+    next(e);
+  }
+});
+
+jobRouter.post("/:id/chats", rbac("Manage Job", "view"), applyOrgScope, async (req, res, next) => {
+  try {
+    const id = /^\d+$/.test(String(req.params.id)) ? Number(req.params.id) : req.params.id;
+    const job = await Job.findOne({
+      where: { job_id: id, ...(req.scopeWhere || {}) },
+      attributes: ["job_id", "technician_id", "supervisor_id"],
+    });
+    if (!job) return res.status(404).json({ message: "Not found" });
+
+    const roleSlug = String(req.user?.role_slug || "").trim().toLowerCase();
+    const actorId = req.user?.sub || req.user?.user_id;
+    if (!actorId) return res.status(401).json({ message: "Unauthenticated" });
+    if (roleSlug === "technician") {
+      const jobPlain = job?.toJSON ? job.toJSON() : job;
+      if (jobPlain.technician_id !== actorId && jobPlain.supervisor_id !== actorId) {
+        return res.status(404).json({ message: "Not found" });
+      }
+    }
+
+    const message = String(req.body?.message || "").trim();
+    if (!message) return res.status(400).json({ message: "Message is required" });
+    if (message.length > 2000) return res.status(400).json({ message: "Message too long" });
+
+    const created = await JobChat.create({ job_id: job.job_id, user_id: actorId, message });
+    await created.reload({
+      attributes: ["id", "job_id", "user_id", "message", "createdAt"],
+      include: [{ model: User, as: "author", attributes: ["user_id", "name", "photo"] }],
+    });
+
+    res.status(201).json(normalizeChatPayload(created));
+  } catch (e) {
+    next(e);
+  }
+});
+
 // moved earlier above the ":id" route to avoid param capture
 
 /**
@@ -514,6 +594,16 @@ jobRouter.get("/:id", rbac("Manage Job", "view"), applyOrgScope, async (req, res
         { model: JobType, as: "job_type" },
         { model: NatureOfWork, as: "nature_of_work" },
         { model: JobStatus, as: "job_status" },
+        {
+          model: JobChat,
+          as: "chats",
+          separate: true,
+          order: [["createdAt", "ASC"]],
+          attributes: ["id", "job_id", "user_id", "message", "createdAt"],
+          include: [
+            { model: User, as: "author", attributes: ["user_id", "name", "photo"] },
+          ],
+        },
       ],
     });
 
@@ -527,6 +617,10 @@ jobRouter.get("/:id", rbac("Manage Job", "view"), applyOrgScope, async (req, res
 
     const jobPlain = job?.toJSON ? job.toJSON() : job;
     ensureGranularDurationFields(jobPlain);
+    const chats = Array.isArray(jobPlain.chats)
+      ? jobPlain.chats.map((chat) => normalizeChatPayload(chat)).filter(Boolean)
+      : [];
+    delete jobPlain.chats;
     // Build actions based on current status
     const allStatuses = await JobStatus.findAll({ where: { status: true } });
     const norm = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
@@ -565,6 +659,7 @@ jobRouter.get("/:id", rbac("Manage Job", "view"), applyOrgScope, async (req, res
         at: h.createdAt,
       })),
       available_actions: actions,
+      chats,
     };
 
     // Ensure no passwords leak in nested users

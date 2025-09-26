@@ -23,6 +23,7 @@ import ClientInit from "./Client.js";
 import JobInit from "./Job.js";
 import JobStatusHistoryInit from "./JobStatusHistory.js";
 import AttendanceInit from "./Attendance.js";
+import JobChatInit from "./JobChat.js";
 
 // Create models
 export const Country = CountryInit(sequelize);
@@ -47,6 +48,7 @@ export const Client = ClientInit(sequelize);
 export const Job = JobInit(sequelize);
 export const JobStatusHistory = JobStatusHistoryInit(sequelize);
 export const Attendance = AttendanceInit(sequelize);
+export const JobChat = JobChatInit(sequelize);
 
 // Associations
 State.belongsTo(Country, { foreignKey: "country_id" });
@@ -98,6 +100,12 @@ Job.hasMany(JobStatusHistory, { foreignKey: "job_id", onDelete: "CASCADE", hooks
 // Link history entries to their status record for eager loading
 JobStatusHistory.belongsTo(JobStatus, { foreignKey: "job_status_id" });
 JobStatus.hasMany(JobStatusHistory, { foreignKey: "job_status_id" });
+
+Job.hasMany(JobChat, { as: "chats", foreignKey: "job_id", onDelete: "CASCADE", hooks: true });
+JobChat.belongsTo(Job, { foreignKey: "job_id", onDelete: "CASCADE" });
+
+JobChat.belongsTo(User, { as: "author", foreignKey: "user_id", onDelete: "CASCADE" });
+User.hasMany(JobChat, { as: "job_chats", foreignKey: "user_id" });
 
 // Attendance associations
 Attendance.belongsTo(Company, { foreignKey: "company_id" });

@@ -2027,6 +2027,18 @@
  *                       job_status_color_code: { type: string }
  *                       is_completed: { type: boolean }
  *                       at: { type: string, format: date-time }
+ *                 chats:
+ *                   type: array
+ *                   description: Chronological messages attached to this job
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       id: { type: string, format: uuid }
+ *                       user_id: { type: string, format: uuid }
+ *                       user_name: { type: string, nullable: true }
+ *                       user_photo: { type: string, nullable: true }
+ *                       message: { type: string }
+ *                       sent_at: { type: string, format: date-time }
  *   put:
  *     tags: [Jobs]
  *     summary: Update job (tracks status changes)
@@ -2062,5 +2074,67 @@
  *           pattern: '^[0-9]+$'
  *           description: Sequential numeric Job ID (string-encoded)
  *     responses:
+ *       200: { description: Deleted }
+ * /jobs/{id}/chats:
+ *   get:
+ *     tags: [Jobs]
+ *     summary: List chat messages for a job
+ *     security: [ { bearerAuth: [] } ]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           example: "100042"
+ *           pattern: '^[0-9]+$'
+ *           description: Sequential numeric Job ID (string-encoded)
+ *     responses:
+ *       200:
+ *         description: OK
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 type: object
+ *                 properties:
+ *                   id: { type: string, format: uuid }
+ *                   user_id: { type: string, format: uuid }
+ *                   user_name: { type: string, nullable: true }
+ *                   user_photo: { type: string, nullable: true }
+ *                   message: { type: string }
+ *                   sent_at: { type: string, format: date-time }
+ *   post:
+ *     tags: [Jobs]
+ *     summary: Append a chat message to a job
+ *     description: Message length is limited to 2000 characters.
+ *     security: [ { bearerAuth: [] } ]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           example: "100042"
+ *           pattern: '^[0-9]+$'
+ *           description: Sequential numeric Job ID (string-encoded)
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [message]
+ *             properties:
+ *               message:
+ *                 type: string
+ *                 maxLength: 2000
+ *                 example: Technician en route to site.
+ *     responses:
+ *       201: { description: Created }
+ *       400: { description: Invalid payload }
+ *       404: { description: Job not found }
+ *
  *       200: { description: Deleted }
  */
