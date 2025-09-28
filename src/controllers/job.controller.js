@@ -77,6 +77,14 @@ function normalizeChatPayload(chat) {
   };
 }
 
+const UUID_REGEX = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+
+function buildJobIdentifierClause(rawId) {
+  const id = String(rawId ?? "").trim();
+  if (!id || !UUID_REGEX.test(id)) return null;
+  return { job_id: id.toLowerCase() };
+}
+
 /**
  * GET /jobs
  * Query params supported:
@@ -108,11 +116,11 @@ jobRouter.get(
 
       const whereBase = buildWhere(req.query, searchFields, exactFields);
 
-      // If searchParam is all digits, also match exact job_id (numeric)
+      // Allow direct job_id matches when full UUID provided
       const sp = String(req.query.searchParam || "").trim();
-      if (sp && /^\d+$/.test(sp)) {
+      if (sp && UUID_REGEX.test(sp)) {
         const orArr = whereBase[Op.or] || [];
-        orArr.push({ job_id: Number(sp) });
+        orArr.push({ job_id: sp.toLowerCase() });
         whereBase[Op.or] = orArr;
       }
 
@@ -509,9 +517,10 @@ jobRouter.post("/", rbac("Manage Job", "add"), applyOrgScope, async (req, res, n
 
 jobRouter.get("/:id/chats", rbac("Manage Job", "view"), applyOrgScope, async (req, res, next) => {
   try {
-    const id = /^\d+$/.test(String(req.params.id)) ? Number(req.params.id) : req.params.id;
+    const idClause = buildJobIdentifierClause(req.params.id);
+    if (!idClause) return res.status(400).json({ message: "Invalid job identifier" });
     const job = await Job.findOne({
-      where: { job_id: id, ...(req.scopeWhere || {}) },
+      where: { ...(req.scopeWhere || {}), ...idClause },
       attributes: ["job_id", "technician_id", "supervisor_id"],
     });
     if (!job) return res.status(404).json({ message: "Not found" });
@@ -540,9 +549,10 @@ jobRouter.get("/:id/chats", rbac("Manage Job", "view"), applyOrgScope, async (re
 
 jobRouter.post("/:id/chats", rbac("Manage Job", "view"), applyOrgScope, async (req, res, next) => {
   try {
-    const id = /^\d+$/.test(String(req.params.id)) ? Number(req.params.id) : req.params.id;
+    const idClause = buildJobIdentifierClause(req.params.id);
+    if (!idClause) return res.status(400).json({ message: "Invalid job identifier" });
     const job = await Job.findOne({
-      where: { job_id: id, ...(req.scopeWhere || {}) },
+      where: { ...(req.scopeWhere || {}), ...idClause },
       attributes: ["job_id", "technician_id", "supervisor_id"],
     });
     if (!job) return res.status(404).json({ message: "Not found" });
@@ -582,9 +592,10 @@ jobRouter.post("/:id/chats", rbac("Manage Job", "view"), applyOrgScope, async (r
 jobRouter.get("/:id", rbac("Manage Job", "view"), applyOrgScope, async (req, res, next) => {
   try {
     const jobAttrs = await getJobAttributesList();
-    const id = /^\d+$/.test(String(req.params.id)) ? Number(req.params.id) : req.params.id;
+    const idClause = buildJobIdentifierClause(req.params.id);
+    if (!idClause) return res.status(400).json({ message: "Invalid job identifier" });
     const job = await Job.findOne({
-      where: { job_id: id, ...(req.scopeWhere || {}) },
+      where: { ...(req.scopeWhere || {}), ...idClause },
       attributes: jobAttrs,
       include: [
         { model: Client, as: "client" },
@@ -770,9 +781,10 @@ jobRouter.get(
  */
 jobRouter.put("/:id", rbac("Manage Job", "edit"), applyOrgScope, async (req, res, next) => {
   try {
-    const id = /^\d+$/.test(String(req.params.id)) ? Number(req.params.id) : req.params.id;
+    const idClause = buildJobIdentifierClause(req.params.id);
+    if (!idClause) return res.status(400).json({ message: "Invalid job identifier" });
     const job = await Job.findOne({
-      where: { job_id: id, ...(req.scopeWhere || {}) },
+      where: { ...(req.scopeWhere || {}), ...idClause },
     });
     if (!job) return res.status(404).json({ message: "Not found" });
 
@@ -858,9 +870,10 @@ jobRouter.put("/:id", rbac("Manage Job", "edit"), applyOrgScope, async (req, res
  */
 jobRouter.delete("/:id", rbac("Manage Job", "delete"), applyOrgScope, async (req, res, next) => {
   try {
-    const id = /^\d+$/.test(String(req.params.id)) ? Number(req.params.id) : req.params.id;
+    const idClause = buildJobIdentifierClause(req.params.id);
+    if (!idClause) return res.status(400).json({ message: "Invalid job identifier" });
     const job = await Job.findOne({
-      where: { job_id: id, ...(req.scopeWhere || {}) },
+      where: { ...(req.scopeWhere || {}), ...idClause },
     });
     if (!job) return res.status(404).json({ message: "Not found" });
 

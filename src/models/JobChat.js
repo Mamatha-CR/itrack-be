@@ -11,7 +11,7 @@ export default (sequelize) =>
         primaryKey: true,
       },
       job_id: {
-        type: DataTypes.BIGINT,
+        type: DataTypes.UUID,
         allowNull: false,
       },
       user_id: {

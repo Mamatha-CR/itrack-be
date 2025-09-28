@@ -1994,9 +1994,9 @@
  *         required: true
  *         schema:
  *           type: string
- *           example: "100042"
- *           pattern: '^[0-9]+$'
- *           description: Sequential numeric Job ID (string-encoded)
+ *           format: uuid
+ *           example: "7bde3b8d-1234-4fcd-8123-5a6b7c8d9e10"
+ *           description: Job identifier (UUID)
  *     responses:
  *       200:
  *         description: OK
@@ -2007,8 +2007,9 @@
  *               properties:
  *                 job_id:
  *                   type: string
- *                   example: "100042"
- *                   description: Sequential numeric Job ID (string-encoded)
+ *                   format: uuid
+ *                   example: "7bde3b8d-1234-4fcd-8123-5a6b7c8d9e10"
+ *                   description: Job identifier (UUID)
  *                 client: { type: object }
  *                 technician: { type: object, description: Password excluded }
  *                 supervisor: { type: object, description: Password excluded }
@@ -2050,9 +2051,9 @@
  *         required: true
  *         schema:
  *           type: string
- *           example: "100042"
- *           pattern: '^[0-9]+$'
- *           description: Sequential numeric Job ID (string-encoded)
+ *           format: uuid
+ *           example: "7bde3b8d-1234-4fcd-8123-5a6b7c8d9e10"
+ *           description: Job identifier (UUID)
  *     requestBody:
  *       required: true
  *       content:
@@ -2070,9 +2071,9 @@
  *         required: true
  *         schema:
  *           type: string
- *           example: "100042"
- *           pattern: '^[0-9]+$'
- *           description: Sequential numeric Job ID (string-encoded)
+ *           format: uuid
+ *           example: "7bde3b8d-1234-4fcd-8123-5a6b7c8d9e10"
+ *           description: Job identifier (UUID)
  *     responses:
  *       200: { description: Deleted }
  * /jobs/{id}/chats:
@@ -2086,9 +2087,9 @@
  *         required: true
  *         schema:
  *           type: string
- *           example: "100042"
- *           pattern: '^[0-9]+$'
- *           description: Sequential numeric Job ID (string-encoded)
+ *           format: uuid
+ *           example: "7bde3b8d-1234-4fcd-8123-5a6b7c8d9e10"
+ *           description: Job identifier (UUID)
  *     responses:
  *       200:
  *         description: OK
@@ -2116,9 +2117,9 @@
  *         required: true
  *         schema:
  *           type: string
- *           example: "100042"
- *           pattern: '^[0-9]+$'
- *           description: Sequential numeric Job ID (string-encoded)
+ *           format: uuid
+ *           example: "7bde3b8d-1234-4fcd-8123-5a6b7c8d9e10"
+ *           description: Job identifier (UUID)
  *     requestBody:
  *       required: true
  *       content:

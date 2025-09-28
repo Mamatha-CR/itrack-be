@@ -118,29 +118,183 @@ RoleScreenPermission.belongsTo(Screen, { foreignKey: "screen_id" });
 Screen.hasMany(RoleScreenPermission, { foreignKey: "screen_id" });
 
 export async function syncAll() {
+  await convertLegacyJobIds();
+  await cleanupLegacyJobNo();
   await sequelize.sync({ alter: true });
-  // Ensure numeric short-id sequence for jobs exists and starts at 6 digits
+}
+
+const uuidFromColumn = (columnRef) => `(
+  substr(md5(${columnRef}::text || 'JobUUID'), 1, 8) || '-' ||
+  substr(md5(${columnRef}::text || 'JobUUID'), 9, 4) || '-' ||
+  substr(md5(${columnRef}::text || 'JobUUID'), 13, 4) || '-' ||
+  substr(md5(${columnRef}::text || 'JobUUID'), 17, 4) || '-' ||
+  substr(md5(${columnRef}::text || 'JobUUID'), 21, 12)
+)::uuid`;
+
+async function getColumnType(table, column) {
   try {
-    await sequelize.query(`
-      DO $$
-      BEGIN
-        IF NOT EXISTS (
-          SELECT 1 FROM pg_class c
-          JOIN pg_namespace n ON n.oid = c.relnamespace
-          WHERE c.relkind = 'S' AND c.relname = 'job_id_seq'
-        ) THEN
-          CREATE SEQUENCE job_id_seq START WITH 100000 MINVALUE 100000;
-        END IF;
-      END $$;
+    const [rows] = await sequelize.query(
+      `SELECT data_type FROM information_schema.columns WHERE table_schema = 'public' AND table_name = '${table}' AND column_name = '${column}'`
+    );
+    const rec = Array.isArray(rows) ? rows[0] : rows;
+    return rec?.data_type ? String(rec.data_type).toLowerCase() : null;
+  } catch (err) {
+    console.warn(`Column lookup failed for ${table}.${column}`, err?.message || err);
+    return null;
+  }
+}
+
+async function getJobRelations() {
+  try {
+    const [rows] = await sequelize.query(`
+      SELECT tc.table_name AS table_name, tc.constraint_name AS constraint_name
+      FROM information_schema.table_constraints tc
+      JOIN information_schema.key_column_usage kcu ON tc.constraint_name = kcu.constraint_name
+      JOIN information_schema.constraint_column_usage ccu ON ccu.constraint_name = tc.constraint_name
+      WHERE tc.constraint_type = 'FOREIGN KEY'
+        AND tc.table_schema = 'public'
+        AND kcu.column_name = 'job_id'
+        AND ccu.table_name = 'Job';
     `);
-    // If sequence exists but below 100000, bump it
-    const [rows] = await sequelize.query("SELECT last_value FROM job_id_seq");
-    const last = Array.isArray(rows) ? rows[0]?.last_value : rows?.last_value;
-    if (Number(last) < 100000) {
-      await sequelize.query("ALTER SEQUENCE job_id_seq RESTART WITH 100000");
+    if (!Array.isArray(rows)) return [];
+    return rows.map((r) => ({
+      table: r.table_name,
+      constraint: r.constraint_name,
+    }));
+  } catch (err) {
+    console.warn('Job relation lookup failed:', err?.message || err);
+    return [];
+  }
+}
+
+async function convertLegacyJobIds() {
+  const jobType = await getColumnType('Job', 'job_id');
+  const relations = await getJobRelations();
+
+  const relationsToConvert = [];
+  for (const rel of relations) {
+    const relType = await getColumnType(rel.table, 'job_id');
+    if (relType && relType !== 'uuid') {
+      relationsToConvert.push(rel);
     }
+  }
+
+  const needsJob = !!jobType && jobType !== 'uuid';
+
+  if (!needsJob && relationsToConvert.length === 0) return;
+
+  if (needsJob) {
+    await convertJobTableToUuid(relationsToConvert);
+  } else if (relationsToConvert.length) {
+    await convertJobRelationsToUuid(relationsToConvert);
+  }
+
+  try {
+    await sequelize.query('DROP SEQUENCE IF EXISTS job_id_seq');
   } catch (e) {
-    // Log but do not crash startup
-    console.warn("Sequence ensure failed:", e?.message || e);
+    console.warn('job_id_seq cleanup failed:', e?.message || e);
+  }
+}
+
+async function convertJobTableToUuid(relations) {
+  const jobUuidExpr = uuidFromColumn('job_id');
+
+  try {
+    await sequelize.transaction(async (transaction) => {
+      for (const rel of relations) {
+        if (rel.constraint) {
+          await sequelize.query(`ALTER TABLE "${rel.table}" DROP CONSTRAINT IF EXISTS "${rel.constraint}"`, {
+            transaction,
+          });
+        }
+      }
+
+      await sequelize.query('ALTER TABLE "Job" DROP CONSTRAINT IF EXISTS "Job_pkey"', { transaction });
+      await sequelize.query('ALTER TABLE "Job" ADD COLUMN IF NOT EXISTS job_uuid uuid', { transaction });
+      await sequelize.query(`UPDATE "Job" SET job_uuid = ${jobUuidExpr} WHERE job_uuid IS NULL`, { transaction });
+      await sequelize.query('ALTER TABLE "Job" ALTER COLUMN job_uuid SET NOT NULL', { transaction });
+
+      for (const rel of relations) {
+        await convertRelationTable(rel, { transaction, jobTableHasUuidColumn: true });
+      }
+
+      await sequelize.query('ALTER TABLE "Job" DROP COLUMN job_id', { transaction });
+      await sequelize.query('ALTER TABLE "Job" RENAME COLUMN job_uuid TO job_id', { transaction });
+      await sequelize.query('ALTER TABLE "Job" ADD PRIMARY KEY (job_id)', { transaction });
+
+      for (const rel of relations) {
+        const constraintName = rel.constraint || `${rel.table}_job_id_fkey`;
+        await sequelize.query(
+          `ALTER TABLE "${rel.table}" ADD CONSTRAINT "${constraintName}" FOREIGN KEY (job_id) REFERENCES "Job"(job_id) ON DELETE CASCADE`,
+          { transaction }
+        );
+      }
+    });
+  } catch (e) {
+    console.warn('Job UUID migration failed:', e?.message || e);
+  }
+}
+
+async function convertRelationTable({ table, constraint }, { transaction, jobTableHasUuidColumn }) {
+  const alias = 'rel';
+  const computedUuid = uuidFromColumn(`${alias}.job_id`);
+  const existingFromJob = jobTableHasUuidColumn
+    ? `(SELECT job_uuid FROM "Job" j WHERE j.job_id::text = ${alias}.job_id::text LIMIT 1)`
+    : `(SELECT job_id FROM "Job" j WHERE j.job_id = ${computedUuid} LIMIT 1)`;
+  const fallbackFromJob = jobTableHasUuidColumn
+    ? `(SELECT job_uuid FROM "Job" j WHERE j.job_uuid = ${computedUuid} LIMIT 1)`
+    : `(SELECT job_id FROM "Job" j WHERE j.job_id = ${computedUuid} LIMIT 1)`;
+
+  if (constraint) {
+    await sequelize.query(`ALTER TABLE "${table}" DROP CONSTRAINT IF EXISTS "${constraint}"`, { transaction });
+  }
+
+  await sequelize.query(`ALTER TABLE "${table}" ADD COLUMN IF NOT EXISTS job_uuid uuid`, { transaction });
+  await sequelize.query(
+    `UPDATE "${table}" AS ${alias}
+     SET job_uuid = COALESCE(job_uuid, ${existingFromJob}, ${fallbackFromJob}, ${computedUuid})`,
+    { transaction }
+  );
+  await sequelize.query(`ALTER TABLE "${table}" ALTER COLUMN job_uuid SET NOT NULL`, { transaction });
+  await sequelize.query(`ALTER TABLE "${table}" DROP COLUMN job_id`, { transaction });
+  await sequelize.query(`ALTER TABLE "${table}" RENAME COLUMN job_uuid TO job_id`, { transaction });
+}
+
+async function convertJobRelationsToUuid(relations) {
+  if (!relations.length) return;
+
+  try {
+    await sequelize.transaction(async (transaction) => {
+      for (const rel of relations) {
+        await convertRelationTable(rel, { transaction, jobTableHasUuidColumn: false });
+        const constraintName = rel.constraint || `${rel.table}_job_id_fkey`;
+        await sequelize.query(
+          `ALTER TABLE "${rel.table}" ADD CONSTRAINT "${constraintName}" FOREIGN KEY (job_id) REFERENCES "Job"(job_id) ON DELETE CASCADE`,
+          { transaction }
+        );
+      }
+    });
+  } catch (e) {
+    console.warn('Job relation UUID migration failed:', e?.message || e);
+  }
+}
+
+async function cleanupLegacyJobNo() {
+  const jobType = await getColumnType('Job', 'job_id');
+  if (!jobType) return;
+  try {
+    await sequelize.query('DROP INDEX IF EXISTS job_job_no_unique');
+  } catch (e) {
+    console.warn('job_job_no_unique drop failed:', e?.message || e);
+  }
+  try {
+    await sequelize.query('ALTER TABLE "Job" DROP COLUMN IF EXISTS job_no');
+  } catch (e) {
+    console.warn('job_no column drop failed:', e?.message || e);
+  }
+  try {
+    await sequelize.query('DROP SEQUENCE IF EXISTS job_no_seq');
+  } catch (e) {
+    console.warn('job_no_seq drop failed:', e?.message || e);
   }
 }

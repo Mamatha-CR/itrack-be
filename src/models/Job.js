@@ -14,16 +14,6 @@ export default (sequelize) => {
         defaultValue: DataTypes.UUIDV4,
       },
 
-      // Numeric, monotonic job number
-      job_no: {
-        type: DataTypes.BIGINT,
-        allowNull: false,
-        unique: "job_job_no_unique",
-        // If DB uses a sequence:
-        defaultValue: sequelize.literal(`nextval('job_no_seq')`),
-        // If DB uses IDENTITY instead, delete the line above entirely.
-      },
-
       company_id: { type: DataTypes.UUID },
       client_id: { type: DataTypes.UUID, allowNull: false },
       reference_number: { type: DataTypes.STRING, allowNull: true, unique: true },
@@ -46,7 +36,6 @@ export default (sequelize) => {
     },
     {
       hooks: {}, // ✅ no beforeCreate hook
-      indexes: [{ name: "job_job_no_unique", unique: true, fields: ["job_no"] }],
     }
   );
 
