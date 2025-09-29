@@ -24,6 +24,7 @@ import JobInit from "./Job.js";
 import JobStatusHistoryInit from "./JobStatusHistory.js";
 import AttendanceInit from "./Attendance.js";
 import JobChatInit from "./JobChat.js";
+import JobAttachmentInit from "./JobAttachment.js";
 
 // Create models
 export const Country = CountryInit(sequelize);
@@ -49,6 +50,7 @@ export const Job = JobInit(sequelize);
 export const JobStatusHistory = JobStatusHistoryInit(sequelize);
 export const Attendance = AttendanceInit(sequelize);
 export const JobChat = JobChatInit(sequelize);
+export const JobAttachment = JobAttachmentInit(sequelize);
 
 // Associations
 State.belongsTo(Country, { foreignKey: "country_id" });
@@ -104,8 +106,12 @@ JobStatus.hasMany(JobStatusHistory, { foreignKey: "job_status_id" });
 Job.hasMany(JobChat, { as: "chats", foreignKey: "job_id", onDelete: "CASCADE", hooks: true });
 JobChat.belongsTo(Job, { foreignKey: "job_id", onDelete: "CASCADE" });
 
+Job.hasMany(JobAttachment, { as: "attachments", foreignKey: "job_id", onDelete: "CASCADE", hooks: true });
+JobAttachment.belongsTo(Job, { foreignKey: "job_id", onDelete: "CASCADE" });
+JobAttachment.belongsTo(User, { as: "uploader", foreignKey: "uploaded_by", onDelete: "SET NULL" });
 JobChat.belongsTo(User, { as: "author", foreignKey: "user_id", onDelete: "CASCADE" });
 User.hasMany(JobChat, { as: "job_chats", foreignKey: "user_id" });
+User.hasMany(JobAttachment, { as: "uploaded_attachments", foreignKey: "uploaded_by" });
 
 // Attendance associations
 Attendance.belongsTo(Company, { foreignKey: "company_id" });

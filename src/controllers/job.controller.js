@@ -1,9 +1,11 @@
 // src/routes/job.routes.js
 import express from "express";
+import multer from "multer";
 import { rbac } from "../middleware/rbac.js";
 import { parseListQuery } from "../middleware/pagination.js";
 import { applyOrgScope } from "../middleware/orgScope.js";
 import { buildWhere } from "../utils/filters.js";
+import { uploadBufferToS3 } from "../utils/s3.js";
 import { Op, Sequelize } from "sequelize";
 import { sequelize } from "../config/database.js";
 import {
@@ -16,6 +18,7 @@ import {
   JobStatus,
   JobStatusHistory,
   JobChat,
+  JobAttachment,
   Role,
   Region,
 } from "../models/index.js";
@@ -75,6 +78,77 @@ function normalizeChatPayload(chat) {
     message: plain.message,
     sent_at: plain.createdAt,
   };
+}
+
+function normalizeAttachment(att) {
+  if (!att) return null;
+  const plain = att?.toJSON ? att.toJSON() : att;
+  return {
+    attachment_id: plain.attachment_id,
+    file_name: plain.file_name,
+    content_type: plain.content_type,
+    file_size: plain.file_size,
+    url: plain.url,
+    s3_key: plain.s3_key || null,
+    uploaded_by: plain.uploaded_by,
+    uploaded_at: plain.createdAt,
+    uploader: plain.uploader
+      ? {
+          user_id: plain.uploader.user_id,
+          name: plain.uploader.name,
+          photo: plain.uploader.photo,
+        }
+      : null,
+  };
+}
+
+const MAX_JOB_ATTACHMENT_BYTES = Number(process.env.JOB_ATTACHMENT_MAX_BYTES || process.env.MAX_UPLOAD_BYTES || 20 * 1024 * 1024);
+const MAX_JOB_ATTACHMENT_FILES = Number(process.env.JOB_ATTACHMENT_MAX_FILES || 5);
+const attachmentUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_JOB_ATTACHMENT_BYTES },
+  fileFilter: (_req, file, cb) => {
+    const allowed = [/^image\//i, /^application\//i, /^text\//i];
+    if (!allowed.some((rx) => rx.test(file.mimetype))) {
+      const err = new Error('Unsupported attachment type');
+      err.status = 400;
+      return cb(err);
+    }
+    cb(null, true);
+  },
+});
+
+async function saveJobAttachments({ jobId, files, actorId, keyPrefix }) {
+  const items = Array.isArray(files) ? files.filter((f) => f && f.buffer) : [];
+  if (!items.length) return [];
+  if (items.length > MAX_JOB_ATTACHMENT_FILES) {
+    const err = new Error(`Too many attachments (max ${MAX_JOB_ATTACHMENT_FILES})`);
+    err.status = 400;
+    throw err;
+  }
+  const prefix = keyPrefix || process.env.S3_KEY_PREFIX_JOB_ATTACHMENTS || "uploads/jobs/attachments/";
+  const created = [];
+  for (const file of items) {
+    const { buffer, mimetype, originalname, size } = file;
+    const result = await uploadBufferToS3({
+      buffer,
+      contentType: mimetype,
+      filename: originalname,
+      keyPrefix: prefix,
+    });
+    const attachment = await JobAttachment.create({
+      job_id: jobId,
+      file_name: originalname,
+      content_type: result.contentType || mimetype,
+      file_size: size,
+      url: result.url,
+      s3_key: result.key,
+      uploaded_by: actorId || null,
+    });
+    await attachment.reload({ include: [{ model: User, as: "uploader", attributes: ["user_id", "name", "photo"] }] });
+    created.push(normalizeAttachment(attachment));
+  }
+  return created;
 }
 
 const UUID_REGEX = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
@@ -515,6 +589,96 @@ jobRouter.post("/", rbac("Manage Job", "add"), applyOrgScope, async (req, res, n
   }
 });
 
+jobRouter.get("/:id/attachments", rbac("Manage Job", "view"), applyOrgScope, async (req, res, next) => {
+  try {
+    const idClause = buildJobIdentifierClause(req.params.id);
+    if (!idClause) return res.status(400).json({ message: "Invalid job identifier" });
+    const job = await Job.findOne({
+      where: { ...(req.scopeWhere || {}), ...idClause },
+      attributes: ["job_id"],
+    });
+    if (!job) return res.status(404).json({ message: "Not found" });
+
+    const records = await JobAttachment.findAll({
+      where: { job_id: job.job_id },
+      order: [["createdAt", "DESC"]],
+      include: [{ model: User, as: "uploader", attributes: ["user_id", "name", "photo"] }],
+    });
+
+    res.json(records.map((att) => normalizeAttachment(att)).filter(Boolean));
+  } catch (e) {
+    next(e);
+  }
+});
+
+jobRouter.post(
+  "/:id/attachments",
+  rbac("Manage Job", "edit"),
+  applyOrgScope,
+  attachmentUpload.array("files", MAX_JOB_ATTACHMENT_FILES),
+  async (req, res, next) => {
+    try {
+      const idClause = buildJobIdentifierClause(req.params.id);
+      if (!idClause) return res.status(400).json({ message: "Invalid job identifier" });
+      const job = await Job.findOne({
+        where: { ...(req.scopeWhere || {}), ...idClause },
+        attributes: ["job_id"],
+      });
+      if (!job) return res.status(404).json({ message: "Not found" });
+
+      const files = Array.isArray(req.files) ? req.files : [];
+      if (!files.length) {
+        const err = new Error("At least one attachment file is required");
+        err.status = 400;
+        throw err;
+      }
+
+      const actorId = req.user?.sub || req.user?.user_id || null;
+      const keyPrefix = process.env.S3_KEY_PREFIX_JOB_ATTACHMENTS || "uploads/jobs/attachments/";
+      const created = await saveJobAttachments({
+        jobId: job.job_id,
+        files,
+        actorId,
+        keyPrefix,
+      });
+
+      res.status(201).json(created);
+    } catch (e) {
+      if (String(e?.message || "").includes("Unsupported attachment type")) {
+        e.status = e.status || 400;
+      }
+      next(e);
+    }
+  }
+);
+
+jobRouter.delete("/:id/attachments/:attachmentId", rbac("Manage Job", "edit"), applyOrgScope, async (req, res, next) => {
+  try {
+    const idClause = buildJobIdentifierClause(req.params.id);
+    if (!idClause) return res.status(400).json({ message: "Invalid job identifier" });
+    const job = await Job.findOne({
+      where: { ...(req.scopeWhere || {}), ...idClause },
+      attributes: ["job_id"],
+    });
+    if (!job) return res.status(404).json({ message: "Not found" });
+
+    const attachmentId = String(req.params.attachmentId || "").trim();
+    if (!UUID_REGEX.test(attachmentId)) {
+      return res.status(400).json({ message: "Invalid attachment identifier" });
+    }
+
+    const attachment = await JobAttachment.findOne({
+      where: { attachment_id: attachmentId, job_id: job.job_id },
+    });
+    if (!attachment) return res.status(404).json({ message: "Not found" });
+
+    await attachment.destroy();
+    res.json({ message: "Deleted" });
+  } catch (e) {
+    next(e);
+  }
+});
+
 jobRouter.get("/:id/chats", rbac("Manage Job", "view"), applyOrgScope, async (req, res, next) => {
   try {
     const idClause = buildJobIdentifierClause(req.params.id);
@@ -615,6 +779,26 @@ jobRouter.get("/:id", rbac("Manage Job", "view"), applyOrgScope, async (req, res
             { model: User, as: "author", attributes: ["user_id", "name", "photo"] },
           ],
         },
+        {
+          model: JobAttachment,
+          as: "attachments",
+          separate: true,
+          order: [["createdAt", "DESC"]],
+          attributes: [
+            "attachment_id",
+            "job_id",
+            "file_name",
+            "content_type",
+            "file_size",
+            "url",
+            "s3_key",
+            "uploaded_by",
+            "createdAt",
+          ],
+          include: [
+            { model: User, as: "uploader", attributes: ["user_id", "name", "photo"] },
+          ],
+        },
       ],
     });
 
@@ -631,7 +815,11 @@ jobRouter.get("/:id", rbac("Manage Job", "view"), applyOrgScope, async (req, res
     const chats = Array.isArray(jobPlain.chats)
       ? jobPlain.chats.map((chat) => normalizeChatPayload(chat)).filter(Boolean)
       : [];
+    const attachments = Array.isArray(jobPlain.attachments)
+      ? jobPlain.attachments.map((att) => normalizeAttachment(att)).filter(Boolean)
+      : [];
     delete jobPlain.chats;
+    delete jobPlain.attachments;
     // Build actions based on current status
     const allStatuses = await JobStatus.findAll({ where: { status: true } });
     const norm = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
@@ -671,6 +859,7 @@ jobRouter.get("/:id", rbac("Manage Job", "view"), applyOrgScope, async (req, res
       })),
       available_actions: actions,
       chats,
+      attachments,
     };
 
     // Ensure no passwords leak in nested users
@@ -779,7 +968,7 @@ jobRouter.get(
  * - Updates job fields.
  * - If job_status_id changes, appends a new JobStatusHistory row.
  */
-jobRouter.put("/:id", rbac("Manage Job", "edit"), applyOrgScope, async (req, res, next) => {
+jobRouter.put("/:id", rbac("Manage Job", "edit"), applyOrgScope, attachmentUpload.any(), async (req, res, next) => {
   try {
     const idClause = buildJobIdentifierClause(req.params.id);
     if (!idClause) return res.status(400).json({ message: "Invalid job identifier" });
@@ -802,6 +991,19 @@ jobRouter.put("/:id", rbac("Manage Job", "edit"), applyOrgScope, async (req, res
 
     // Normalize estimated duration on updates
     const updates = { ...req.body };
+    delete updates.attachments;
+    delete updates.files;
+    for (const key of Object.keys(updates)) {
+      if (/^files(\[\])?$/i.test(key) || /^attachments(\[\])?$/i.test(key)) {
+        delete updates[key];
+      }
+    }
+
+    const rawFiles = Array.isArray(req.files) ? req.files : [];
+    const attachmentFiles = rawFiles.filter((file) => {
+      const name = String(file?.fieldname || "").toLowerCase();
+      return name === "files" || name === "attachments";
+    });
     const hasGranular = ["estimated_days", "estimated_hours", "estimated_minutes"].some(
       (k) => updates[k] !== undefined && updates[k] !== null
     );
@@ -856,10 +1058,34 @@ jobRouter.put("/:id", rbac("Manage Job", "edit"), applyOrgScope, async (req, res
       });
     }
 
+    let newAttachments = [];
+    if (attachmentFiles.length) {
+      newAttachments = await saveJobAttachments({
+        jobId: job.job_id,
+        files: attachmentFiles,
+        actorId,
+      });
+    }
+
     const jobAttrs = await getJobAttributesList();
     const reloaded = await Job.findOne({ where: { job_id: job.job_id }, attributes: jobAttrs });
 
-    res.json(reloaded || job);
+    let payload;
+    if (reloaded && typeof reloaded.toJSON === "function") {
+      payload = reloaded.toJSON();
+    } else if (reloaded) {
+      payload = reloaded;
+    } else if (job && typeof job.toJSON === "function") {
+      payload = job.toJSON();
+    } else {
+      payload = job;
+    }
+
+    if (newAttachments.length) {
+      payload.attachments = newAttachments;
+    }
+
+    res.json(payload);
   } catch (e) {
     next(e);
   }

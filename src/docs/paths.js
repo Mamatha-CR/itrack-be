@@ -2040,6 +2040,27 @@
  *                       user_photo: { type: string, nullable: true }
  *                       message: { type: string }
  *                       sent_at: { type: string, format: date-time }
+ *                 attachments:
+ *                   type: array
+ *                   description: Files uploaded for this job
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       attachment_id: { type: string, format: uuid }
+ *                       file_name: { type: string }
+ *                       content_type: { type: string, nullable: true }
+ *                       file_size: { type: integer, nullable: true }
+ *                       url: { type: string }
+ *                       s3_key: { type: string, nullable: true }
+ *                       uploaded_by: { type: string, format: uuid, nullable: true }
+ *                       uploaded_at: { type: string, format: date-time }
+ *                       uploader:
+ *                         type: object
+ *                         nullable: true
+ *                         properties:
+ *                           user_id: { type: string, format: uuid }
+ *                           name: { type: string, nullable: true }
+ *                           photo: { type: string, nullable: true }
  *   put:
  *     tags: [Jobs]
  *     summary: Update job (tracks status changes)
@@ -2076,7 +2097,123 @@
  *           description: Job identifier (UUID)
  *     responses:
  *       200: { description: Deleted }
- * /jobs/{id}/chats:
+ * /jobs/{id}/attachments:
+ *   get:
+ *     tags: [Jobs]
+ *     summary: List attachments for a job
+ *     security: [ { bearerAuth: [] } ]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *           example: "7bde3b8d-1234-4fcd-8123-5a6b7c8d9e10"
+ *           description: Job identifier (UUID)
+ *     responses:
+ *       200:
+ *         description: OK
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 type: object
+ *                 properties:
+ *                   attachment_id: { type: string, format: uuid }
+ *                   file_name: { type: string }
+ *                   content_type: { type: string, nullable: true }
+ *                   file_size: { type: integer, nullable: true }
+ *                   url: { type: string }
+ *                   s3_key: { type: string, nullable: true }
+ *                   uploaded_by: { type: string, format: uuid, nullable: true }
+ *                   uploaded_at: { type: string, format: date-time }
+ *                   uploader:
+ *                     type: object
+ *                     nullable: true
+ *                     properties:
+ *                       user_id: { type: string, format: uuid }
+ *                       name: { type: string, nullable: true }
+ *                       photo: { type: string, nullable: true }
+ *   post:
+ *     tags: [Jobs]
+ *     summary: Upload attachments for a job
+ *     description: Accepts up to JOB_ATTACHMENT_MAX_FILES files (default 5).
+ *     security: [ { bearerAuth: [] } ]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *           example: "7bde3b8d-1234-4fcd-8123-5a6b7c8d9e10"
+ *           description: Job identifier (UUID)
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               files:
+ *                 type: array
+ *                 items: { type: string, format: binary }
+ *                 description: One or more files to attach
+ *     responses:
+ *       201:
+ *         description: Created
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 type: object
+ *                 properties:
+ *                   attachment_id: { type: string, format: uuid }
+ *                   file_name: { type: string }
+ *                   content_type: { type: string, nullable: true }
+ *                   file_size: { type: integer, nullable: true }
+ *                   url: { type: string }
+ *                   s3_key: { type: string, nullable: true }
+ *                   uploaded_by: { type: string, format: uuid, nullable: true }
+ *                   uploaded_at: { type: string, format: date-time }
+ *                   uploader:
+ *                     type: object
+ *                     nullable: true
+ *                     properties:
+ *                       user_id: { type: string, format: uuid }
+ *                       name: { type: string, nullable: true }
+ *                       photo: { type: string, nullable: true }
+ *       400: { description: Invalid upload payload }
+ *       404: { description: Job not found }
+ * /jobs/{id}/attachments/{attachmentId}:
+ *   delete:
+ *     tags: [Jobs]
+ *     summary: Delete a job attachment
+ *     security: [ { bearerAuth: [] } ]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *           example: "7bde3b8d-1234-4fcd-8123-5a6b7c8d9e10"
+ *           description: Job identifier (UUID)
+ *       - in: path
+ *         name: attachmentId
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *           example: "2c1b1cf4-0b2a-4e01-9c34-8d4fbded2dd2"
+ *           description: Attachment identifier
+ *     responses:
+ *       200: { description: Deleted }
+ *       404: { description: Attachment not found }
+* /jobs/{id}/chats:
  *   get:
  *     tags: [Jobs]
  *     summary: List chat messages for a job
