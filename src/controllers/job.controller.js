@@ -994,7 +994,7 @@ jobRouter.put("/:id", rbac("Manage Job", "edit"), applyOrgScope, attachmentUploa
     delete updates.attachments;
     delete updates.files;
     for (const key of Object.keys(updates)) {
-      if (/^files(\[\])?$/i.test(key) || /^attachments(\[\])?$/i.test(key)) {
+      if (/^files(\[\d*\])?$/i.test(key) || /^attachments(\[\d*\])?$/i.test(key)) {
         delete updates[key];
       }
     }
@@ -1002,7 +1002,7 @@ jobRouter.put("/:id", rbac("Manage Job", "edit"), applyOrgScope, attachmentUploa
     const rawFiles = Array.isArray(req.files) ? req.files : [];
     const attachmentFiles = rawFiles.filter((file) => {
       const name = String(file?.fieldname || "").toLowerCase();
-      return name === "files" || name === "attachments";
+      return /^files(\[\d*\])?$/.test(name) || /^attachments(\[\d*\])?$/.test(name);
     });
     const hasGranular = ["estimated_days", "estimated_hours", "estimated_minutes"].some(
       (k) => updates[k] !== undefined && updates[k] !== null
