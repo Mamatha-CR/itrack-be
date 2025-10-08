@@ -1,6 +1,7 @@
 import app from "./app.js";
 import { sequelize } from "./config/database.js";
 import { syncAll, JobStatus } from "./models/index.js";
+import { startAttendanceAutoCheckoutJob } from "./jobs/attendanceAutoCheckout.js";
 
 const PORT = process.env.PORT || 4000;
 
@@ -53,6 +54,11 @@ async function start() {
     } catch (e) {
       console.warn("Job status color sync skipped:", e?.message || e);
     }
+
+    if (String(process.env.DISABLE_ATTENDANCE_AUTO_CHECKOUT || "").toLowerCase() !== "true") {
+      startAttendanceAutoCheckoutJob({ logger: console });
+    }
+
     app.listen(PORT, () => console.log(`I-Track backend running on ${PORT}`));
   } catch (e) {
     console.error("Failed to start:", e);
