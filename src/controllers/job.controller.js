@@ -102,7 +102,19 @@ function normalizeAttachment(att) {
   };
 }
 
-const MAX_JOB_ATTACHMENT_BYTES = Number(process.env.JOB_ATTACHMENT_MAX_BYTES || process.env.MAX_UPLOAD_BYTES || 20 * 1024 * 1024);
+async function fetchJobAttachments(jobId) {
+  if (!jobId) return [];
+  const rows = await JobAttachment.findAll({
+    where: { job_id: jobId },
+    order: [["createdAt", "DESC"]],
+    include: [{ model: User, as: "uploader", attributes: ["user_id", "name", "photo"] }],
+  });
+  return rows.map((att) => normalizeAttachment(att)).filter(Boolean);
+}
+
+const MAX_JOB_ATTACHMENT_BYTES = Number(
+  process.env.JOB_ATTACHMENT_MAX_BYTES || process.env.MAX_UPLOAD_BYTES || 20 * 1024 * 1024
+);
 const MAX_JOB_ATTACHMENT_FILES = Number(process.env.JOB_ATTACHMENT_MAX_FILES || 5);
 const attachmentUpload = multer({
   storage: multer.memoryStorage(),
@@ -110,7 +122,7 @@ const attachmentUpload = multer({
   fileFilter: (_req, file, cb) => {
     const allowed = [/^image\//i, /^application\//i, /^text\//i];
     if (!allowed.some((rx) => rx.test(file.mimetype))) {
-      const err = new Error('Unsupported attachment type');
+      const err = new Error("Unsupported attachment type");
       err.status = 400;
       return cb(err);
     }
@@ -126,7 +138,8 @@ async function saveJobAttachments({ jobId, files, actorId, keyPrefix }) {
     err.status = 400;
     throw err;
   }
-  const prefix = keyPrefix || process.env.S3_KEY_PREFIX_JOB_ATTACHMENTS || "uploads/jobs/attachments/";
+  const prefix =
+    keyPrefix || process.env.S3_KEY_PREFIX_JOB_ATTACHMENTS || "uploads/jobs/attachments/";
   const created = [];
   for (const file of items) {
     const { buffer, mimetype, originalname, size } = file;
@@ -145,7 +158,9 @@ async function saveJobAttachments({ jobId, files, actorId, keyPrefix }) {
       s3_key: result.key,
       uploaded_by: actorId || null,
     });
-    await attachment.reload({ include: [{ model: User, as: "uploader", attributes: ["user_id", "name", "photo"] }] });
+    await attachment.reload({
+      include: [{ model: User, as: "uploader", attributes: ["user_id", "name", "photo"] }],
+    });
     created.push(normalizeAttachment(attachment));
   }
   return created;
@@ -199,9 +214,15 @@ jobRouter.get(
       }
 
       // Additional text filters: client name, assignee name, region name
-      const clientName = String(req.query.client_name || "").trim().toLowerCase();
-      const assigneeName = String(req.query.assignee_name || "").trim().toLowerCase();
-      const regionName = String(req.query.region || "").trim().toLowerCase();
+      const clientName = String(req.query.client_name || "")
+        .trim()
+        .toLowerCase();
+      const assigneeName = String(req.query.assignee_name || "")
+        .trim()
+        .toLowerCase();
+      const regionName = String(req.query.region || "")
+        .trim()
+        .toLowerCase();
 
       // Date range on scheduledDateAndTime
       if (req.query.from || req.query.to) {
@@ -212,15 +233,14 @@ jobRouter.get(
 
       const andConds = [];
       // Restrict technicians to only their assigned or supervised jobs (based on token)
-      const roleSlug = String(req.user?.role_slug || "").trim().toLowerCase();
+      const roleSlug = String(req.user?.role_slug || "")
+        .trim()
+        .toLowerCase();
       if (roleSlug === "technician") {
         const actorId = req.user?.sub || req.user?.user_id;
         if (actorId) {
           andConds.push({
-            [Op.or]: [
-              { technician_id: actorId },
-              { supervisor_id: actorId },
-            ],
+            [Op.or]: [{ technician_id: actorId }, { supervisor_id: actorId }],
           });
         }
       }
@@ -303,7 +323,11 @@ jobRouter.get(
           ? "createdAt"
           : Object.keys(attrs)[0];
 
-      const where = { ...whereBase, ...(req.scopeWhere || {}), ...(andConds.length ? { [Op.and]: andConds } : {}) };
+      const where = {
+        ...whereBase,
+        ...(req.scopeWhere || {}),
+        ...(andConds.length ? { [Op.and]: andConds } : {}),
+      };
 
       const include = [
         { model: Client, as: "client" },
@@ -369,71 +393,99 @@ jobRouter.get(
  *                   type: integer
  *                   description: Jobs with status EnRoute, OnSite, or OnHold
  */
-jobRouter.get(
-  "/summary",
-  rbac("Manage Job", "view"),
-  applyOrgScope,
-  async (req, res, next) => {
-    try {
-      const roleSlug = String(req.user?.role_slug || "").trim().toLowerCase();
-      const actorId = req.user?.sub || req.user?.user_id;
+jobRouter.get("/summary", rbac("Manage Job", "view"), applyOrgScope, async (req, res, next) => {
+  try {
+    const roleSlug = String(req.user?.role_slug || "")
+      .trim()
+      .toLowerCase();
+    const actorId = req.user?.sub || req.user?.user_id;
 
-      // Map status titles -> IDs
-      const statuses = await JobStatus.findAll({ where: { status: true } });
-      const norm = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
-      const idByKey = Object.fromEntries(statuses.map((s) => [norm(s.job_status_title), s.job_status_id]));
+    // Map status titles -> IDs
+    const statuses = await JobStatus.findAll({ where: { status: true } });
+    const norm = (s) =>
+      String(s || "")
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "");
+    const idByKey = Object.fromEntries(
+      statuses.map((s) => [norm(s.job_status_title), s.job_status_id])
+    );
 
-      const notStartedId = idByKey["notstarted"];
-      const completedId = idByKey["completed"];
-      const cancelledId = idByKey["cancelled"];
-      const rejectedId = idByKey["rejected"];
-      const assignedTechId = idByKey["assignedtech"];
-      const pandingSet = [idByKey["enroute"], idByKey["onsite"], idByKey["onhold"]].filter(Boolean);
+    const notStartedId = idByKey["notstarted"];
+    const completedId = idByKey["completed"];
+    const cancelledId = idByKey["cancelled"];
+    const rejectedId = idByKey["rejected"];
+    const assignedTechId = idByKey["assignedtech"];
+    const pendingSet = [idByKey["enroute"], idByKey["onsite"], idByKey["onhold"]].filter(Boolean);
 
-      // Base where respecting org scope
-      const baseWhere = { ...(req.scopeWhere || {}) };
-      // Restrict technicians to their assigned/supervised jobs
-      if (roleSlug === "technician" && actorId) {
-        baseWhere[Op.or] = [{ technician_id: actorId }, { supervisor_id: actorId }];
-      }
-
-      // yet_to_accept: Not Started
-      const yetToAccept = notStartedId
-        ? await Job.count({ where: { ...baseWhere, job_status_id: notStartedId } })
-        : 0;
-
-      // completed: Completed
-      const completed = completedId
-        ? await Job.count({ where: { ...baseWhere, job_status_id: completedId } })
-        : 0;
-
-      // total_jobs: Assigned Tech
-      const total_jobs = assignedTechId
-        ? await Job.count({ where: { ...baseWhere, job_status_id: assignedTechId } })
-        : 0;
-
-      // panding: EnRoute, OnSite, OnHold
-      const panding = pandingSet.length
-        ? await Job.count({ where: { ...baseWhere, job_status_id: { [Op.in]: pandingSet } } })
-        : 0;
-
-      // overdue: scheduledDateAndTime < now and not in terminal statuses Completed/Cancelled/Rejected
-      const now = new Date();
-      const excludeSet = [completedId, cancelledId, rejectedId].filter(Boolean);
-      const overdue = await Job.count({
-        where: {
-          ...baseWhere,
-          scheduledDateAndTime: { [Op.lt]: now },
-          ...(excludeSet.length ? { job_status_id: { [Op.notIn]: excludeSet } } : {}),
-        },
-      });
-
-      res.json({ yet_to_accept: yetToAccept, total_jobs, completed, panding, overdue });
-    } catch (e) {
-      next(e);
+    // Base where respecting org scope
+    const baseWhere = { ...(req.scopeWhere || {}) };
+    // Restrict technicians to their assigned/supervised jobs
+    if (roleSlug === "technician" && actorId) {
+      baseWhere[Op.or] = [{ technician_id: actorId }, { supervisor_id: actorId }];
     }
+
+    // yet_to_accept: Not Started
+    const yetToAccept = notStartedId
+      ? await Job.count({ where: { ...baseWhere, job_status_id: notStartedId } })
+      : 0;
+
+    // completed: Completed
+    const completed = completedId
+      ? await Job.count({ where: { ...baseWhere, job_status_id: completedId } })
+      : 0;
+
+    // total_jobs: Assigned Tech
+    const total_jobs = assignedTechId
+      ? await Job.count({ where: { ...baseWhere, job_status_id: assignedTechId } })
+      : 0;
+
+    // pending: EnRoute, OnSite, OnHold
+    const pending = pendingSet.length
+      ? await Job.count({ where: { ...baseWhere, job_status_id: { [Op.in]: pendingSet } } })
+      : 0;
+
+    // overdue: scheduledDateAndTime + estimated duration < now and not in terminal statuses
+    const jobDesc = await getJobTableDesc();
+    const durationSegments = [];
+    if (jobDesc?.estimated_days) {
+      durationSegments.push(`COALESCE("Job"."estimated_days", 0) * 24 * 60`);
+    }
+    if (jobDesc?.estimated_hours) {
+      durationSegments.push(`COALESCE("Job"."estimated_hours", 0) * 60`);
+    }
+    if (jobDesc?.estimated_minutes) {
+      durationSegments.push(`COALESCE("Job"."estimated_minutes", 0)`);
+    }
+    const fallbackDurationExpr = durationSegments.length ? durationSegments.join(" + ") : "0";
+    const durationExpr = jobDesc?.estimated_duration
+      ? `COALESCE("Job"."estimated_duration", ${fallbackDurationExpr})`
+      : fallbackDurationExpr;
+    const deadlineExpr = `"Job"."scheduledDateAndTime" + (${durationExpr} * INTERVAL '1 minute')`;
+
+    const now = new Date();
+    const excludeSet = [completedId, cancelledId, rejectedId].filter(Boolean);
+    const overdueWhere = {
+      ...baseWhere,
+      scheduledDateAndTime: { [Op.ne]: null },
+      ...(excludeSet.length ? { job_status_id: { [Op.notIn]: excludeSet } } : {}),
+    };
+    const overdueCondition = Sequelize.where(Sequelize.literal(deadlineExpr), { [Op.lt]: now });
+    if (overdueWhere[Op.and]) {
+      overdueWhere[Op.and] = Array.isArray(overdueWhere[Op.and])
+        ? [...overdueWhere[Op.and], overdueCondition]
+        : [overdueWhere[Op.and], overdueCondition];
+    } else {
+      overdueWhere[Op.and] = [overdueCondition];
+    }
+    const overdue = await Job.count({
+      where: overdueWhere,
+    });
+
+    res.json({ yet_to_accept: yetToAccept, total_jobs, completed, pending, overdue });
+  } catch (e) {
+    next(e);
   }
-);
+});
 
 /**
  * POST /jobs
@@ -461,7 +513,9 @@ jobRouter.post("/", rbac("Manage Job", "add"), applyOrgScope, async (req, res, n
     }
 
     // Validate technician exists in same company and has technician role
-    const technician = await User.findOne({ where: { user_id: body.technician_id, company_id: companyId } });
+    const technician = await User.findOne({
+      where: { user_id: body.technician_id, company_id: companyId },
+    });
     if (!technician) {
       const err = new Error("technician_id does not exist or is not in the same company");
       err.status = 400;
@@ -477,7 +531,9 @@ jobRouter.post("/", rbac("Manage Job", "add"), applyOrgScope, async (req, res, n
     }
 
     // Validate supervisor exists in same company and has supervisor role
-    const supervisor = await User.findOne({ where: { user_id: body.supervisor_id, company_id: companyId } });
+    const supervisor = await User.findOne({
+      where: { user_id: body.supervisor_id, company_id: companyId },
+    });
     if (!supervisor) {
       const err = new Error("supervisor_id does not exist or is not in the same company");
       err.status = 400;
@@ -528,9 +584,18 @@ jobRouter.post("/", rbac("Manage Job", "add"), applyOrgScope, async (req, res, n
     if (hasGranular) {
       const d = Number.isFinite(Number(body.estimated_days)) ? Number(body.estimated_days) : 0;
       const h = Number.isFinite(Number(body.estimated_hours)) ? Number(body.estimated_hours) : 0;
-      const m = Number.isFinite(Number(body.estimated_minutes)) ? Number(body.estimated_minutes) : 0;
+      const m = Number.isFinite(Number(body.estimated_minutes))
+        ? Number(body.estimated_minutes)
+        : 0;
 
-      if (d < 0 || h < 0 || m < 0 || !Number.isInteger(d) || !Number.isInteger(h) || !Number.isInteger(m)) {
+      if (
+        d < 0 ||
+        h < 0 ||
+        m < 0 ||
+        !Number.isInteger(d) ||
+        !Number.isInteger(h) ||
+        !Number.isInteger(m)
+      ) {
         const err = new Error("estimated_days/hours/minutes must be non-negative integers");
         err.status = 400;
         throw err;
@@ -589,27 +654,26 @@ jobRouter.post("/", rbac("Manage Job", "add"), applyOrgScope, async (req, res, n
   }
 });
 
-jobRouter.get("/:id/attachments", rbac("Manage Job", "view"), applyOrgScope, async (req, res, next) => {
-  try {
-    const idClause = buildJobIdentifierClause(req.params.id);
-    if (!idClause) return res.status(400).json({ message: "Invalid job identifier" });
-    const job = await Job.findOne({
-      where: { ...(req.scopeWhere || {}), ...idClause },
-      attributes: ["job_id"],
-    });
-    if (!job) return res.status(404).json({ message: "Not found" });
-
-    const records = await JobAttachment.findAll({
-      where: { job_id: job.job_id },
-      order: [["createdAt", "DESC"]],
-      include: [{ model: User, as: "uploader", attributes: ["user_id", "name", "photo"] }],
-    });
-
-    res.json(records.map((att) => normalizeAttachment(att)).filter(Boolean));
-  } catch (e) {
-    next(e);
+jobRouter.get(
+  "/:id/attachments",
+  rbac("Manage Job", "view"),
+  applyOrgScope,
+  async (req, res, next) => {
+    try {
+      const idClause = buildJobIdentifierClause(req.params.id);
+      if (!idClause) return res.status(400).json({ message: "Invalid job identifier" });
+      const job = await Job.findOne({
+        where: { ...(req.scopeWhere || {}), ...idClause },
+        attributes: ["job_id"],
+      });
+      if (!job) return res.status(404).json({ message: "Not found" });
+      const attachments = await fetchJobAttachments(job.job_id);
+      res.json(attachments);
+    } catch (e) {
+      next(e);
+    }
   }
-});
+);
 
 jobRouter.post(
   "/:id/attachments",
@@ -652,32 +716,37 @@ jobRouter.post(
   }
 );
 
-jobRouter.delete("/:id/attachments/:attachmentId", rbac("Manage Job", "edit"), applyOrgScope, async (req, res, next) => {
-  try {
-    const idClause = buildJobIdentifierClause(req.params.id);
-    if (!idClause) return res.status(400).json({ message: "Invalid job identifier" });
-    const job = await Job.findOne({
-      where: { ...(req.scopeWhere || {}), ...idClause },
-      attributes: ["job_id"],
-    });
-    if (!job) return res.status(404).json({ message: "Not found" });
+jobRouter.delete(
+  "/:id/attachments/:attachmentId",
+  rbac("Manage Job", "edit"),
+  applyOrgScope,
+  async (req, res, next) => {
+    try {
+      const idClause = buildJobIdentifierClause(req.params.id);
+      if (!idClause) return res.status(400).json({ message: "Invalid job identifier" });
+      const job = await Job.findOne({
+        where: { ...(req.scopeWhere || {}), ...idClause },
+        attributes: ["job_id"],
+      });
+      if (!job) return res.status(404).json({ message: "Not found" });
 
-    const attachmentId = String(req.params.attachmentId || "").trim();
-    if (!UUID_REGEX.test(attachmentId)) {
-      return res.status(400).json({ message: "Invalid attachment identifier" });
+      const attachmentId = String(req.params.attachmentId || "").trim();
+      if (!UUID_REGEX.test(attachmentId)) {
+        return res.status(400).json({ message: "Invalid attachment identifier" });
+      }
+
+      const attachment = await JobAttachment.findOne({
+        where: { attachment_id: attachmentId, job_id: job.job_id },
+      });
+      if (!attachment) return res.status(404).json({ message: "Not found" });
+
+      await attachment.destroy();
+      res.json({ message: "Deleted" });
+    } catch (e) {
+      next(e);
     }
-
-    const attachment = await JobAttachment.findOne({
-      where: { attachment_id: attachmentId, job_id: job.job_id },
-    });
-    if (!attachment) return res.status(404).json({ message: "Not found" });
-
-    await attachment.destroy();
-    res.json({ message: "Deleted" });
-  } catch (e) {
-    next(e);
   }
-});
+);
 
 jobRouter.get("/:id/chats", rbac("Manage Job", "view"), applyOrgScope, async (req, res, next) => {
   try {
@@ -689,7 +758,9 @@ jobRouter.get("/:id/chats", rbac("Manage Job", "view"), applyOrgScope, async (re
     });
     if (!job) return res.status(404).json({ message: "Not found" });
 
-    const roleSlug = String(req.user?.role_slug || "").trim().toLowerCase();
+    const roleSlug = String(req.user?.role_slug || "")
+      .trim()
+      .toLowerCase();
     const actorId = req.user?.sub || req.user?.user_id;
     if (roleSlug === "technician" && actorId) {
       const jobPlain = job?.toJSON ? job.toJSON() : job;
@@ -721,7 +792,9 @@ jobRouter.post("/:id/chats", rbac("Manage Job", "view"), applyOrgScope, async (r
     });
     if (!job) return res.status(404).json({ message: "Not found" });
 
-    const roleSlug = String(req.user?.role_slug || "").trim().toLowerCase();
+    const roleSlug = String(req.user?.role_slug || "")
+      .trim()
+      .toLowerCase();
     const actorId = req.user?.sub || req.user?.user_id;
     if (!actorId) return res.status(401).json({ message: "Unauthenticated" });
     if (roleSlug === "technician") {
@@ -775,9 +848,7 @@ jobRouter.get("/:id", rbac("Manage Job", "view"), applyOrgScope, async (req, res
           separate: true,
           order: [["createdAt", "ASC"]],
           attributes: ["id", "job_id", "user_id", "message", "createdAt"],
-          include: [
-            { model: User, as: "author", attributes: ["user_id", "name", "photo"] },
-          ],
+          include: [{ model: User, as: "author", attributes: ["user_id", "name", "photo"] }],
         },
         {
           model: JobAttachment,
@@ -795,9 +866,7 @@ jobRouter.get("/:id", rbac("Manage Job", "view"), applyOrgScope, async (req, res
             "uploaded_by",
             "createdAt",
           ],
-          include: [
-            { model: User, as: "uploader", attributes: ["user_id", "name", "photo"] },
-          ],
+          include: [{ model: User, as: "uploader", attributes: ["user_id", "name", "photo"] }],
         },
       ],
     });
@@ -815,33 +884,64 @@ jobRouter.get("/:id", rbac("Manage Job", "view"), applyOrgScope, async (req, res
     const chats = Array.isArray(jobPlain.chats)
       ? jobPlain.chats.map((chat) => normalizeChatPayload(chat)).filter(Boolean)
       : [];
-    const attachments = Array.isArray(jobPlain.attachments)
+    let attachments = Array.isArray(jobPlain.attachments)
       ? jobPlain.attachments.map((att) => normalizeAttachment(att)).filter(Boolean)
       : [];
     delete jobPlain.chats;
     delete jobPlain.attachments;
+    if (!attachments.length) {
+      attachments = await fetchJobAttachments(job.job_id);
+    }
     // Build actions based on current status
     const allStatuses = await JobStatus.findAll({ where: { status: true } });
-    const norm = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+    const norm = (s) =>
+      String(s || "")
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "");
     const byKey = Object.fromEntries(allStatuses.map((s) => [norm(s.job_status_title), s]));
     const currentKey = norm(jobPlain?.job_status?.job_status_title);
 
     const actions = [];
     // Accept/Reject from Not Started
     if (currentKey === "notstarted") {
-      if (byKey["assignedtech"]) actions.push({ action: "accept", to_status_id: byKey["assignedtech"].job_status_id, to_status_title: byKey["assignedtech"].job_status_title });
-      if (byKey["rejected"]) actions.push({ action: "reject", to_status_id: byKey["rejected"].job_status_id, to_status_title: byKey["rejected"].job_status_title });
+      if (byKey["assignedtech"])
+        actions.push({
+          action: "accept",
+          to_status_id: byKey["assignedtech"].job_status_id,
+          to_status_title: byKey["assignedtech"].job_status_title,
+        });
+      if (byKey["rejected"])
+        actions.push({
+          action: "reject",
+          to_status_id: byKey["rejected"].job_status_id,
+          to_status_title: byKey["rejected"].job_status_title,
+        });
     } else {
       // After assignment
       const next = ["enroute", "onsite", "completed", "unresolved"];
       for (const k of next) {
-        if (byKey[k]) actions.push({ action: k, to_status_id: byKey[k].job_status_id, to_status_title: byKey[k].job_status_title });
+        if (byKey[k])
+          actions.push({
+            action: k,
+            to_status_id: byKey[k].job_status_id,
+            to_status_title: byKey[k].job_status_title,
+          });
       }
       // Toggle hold/resume
       if (currentKey === "onhold") {
-        if (byKey["onresume"]) actions.push({ action: "resume", to_status_id: byKey["onresume"].job_status_id, to_status_title: byKey["onresume"].job_status_title });
+        if (byKey["onresume"])
+          actions.push({
+            action: "resume",
+            to_status_id: byKey["onresume"].job_status_id,
+            to_status_title: byKey["onresume"].job_status_title,
+          });
       } else {
-        if (byKey["onhold"]) actions.push({ action: "onhold", to_status_id: byKey["onhold"].job_status_id, to_status_title: byKey["onhold"].job_status_title });
+        if (byKey["onhold"])
+          actions.push({
+            action: "onhold",
+            to_status_id: byKey["onhold"].job_status_id,
+            to_status_title: byKey["onhold"].job_status_title,
+          });
       }
     }
 
@@ -897,199 +997,251 @@ jobRouter.get("/:id", rbac("Manage Job", "view"), applyOrgScope, async (req, res
  *                 waiting_for_submission:
  *                   type: integer
  */
-jobRouter.get(
-  "/summary",
-  rbac("Manage Job", "view"),
-  applyOrgScope,
-  async (req, res, next) => {
-    try {
-      const roleSlug = String(req.user?.role_slug || "").trim().toLowerCase();
-      const actorId = req.user?.sub || req.user?.user_id;
+jobRouter.get("/summary", rbac("Manage Job", "view"), applyOrgScope, async (req, res, next) => {
+  try {
+    const roleSlug = String(req.user?.role_slug || "")
+      .trim()
+      .toLowerCase();
+    const actorId = req.user?.sub || req.user?.user_id;
 
-      // Map status titles -> IDs
-      const statuses = await JobStatus.findAll({ where: { status: true } });
-      const norm = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
-      const idByKey = Object.fromEntries(statuses.map((s) => [norm(s.job_status_title), s.job_status_id]));
+    // Map status titles -> IDs
+    const statuses = await JobStatus.findAll({ where: { status: true } });
+    const norm = (s) =>
+      String(s || "")
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "");
+    const idByKey = Object.fromEntries(
+      statuses.map((s) => [norm(s.job_status_title), s.job_status_id])
+    );
 
-      const notStartedId = idByKey["notstarted"];
-      const completedId = idByKey["completed"];
-      const cancelledId = idByKey["cancelled"];
-      const rejectedId = idByKey["rejected"];
-      const waitingSet = [
-        idByKey["assignedtech"],
-        idByKey["enroute"],
-        idByKey["onsite"],
-        idByKey["onresume"],
-        idByKey["onhold"],
-      ].filter(Boolean);
+    const notStartedId = idByKey["notstarted"];
+    const completedId = idByKey["completed"];
+    const cancelledId = idByKey["cancelled"];
+    const rejectedId = idByKey["rejected"];
+    const waitingSet = [
+      idByKey["assignedtech"],
+      idByKey["enroute"],
+      idByKey["onsite"],
+      idByKey["onresume"],
+      idByKey["onhold"],
+    ].filter(Boolean);
 
-      // Base where respecting org scope
-      const baseWhere = { ...(req.scopeWhere || {}) };
-      // Restrict technicians to their assigned/supervised jobs
-      if (roleSlug === "technician" && actorId) {
-        baseWhere[Op.or] = [{ technician_id: actorId }, { supervisor_id: actorId }];
-      }
-
-      // yet_to_accept: Not Started
-      const yetToAccept = notStartedId
-        ? await Job.count({ where: { ...baseWhere, job_status_id: notStartedId } })
-        : 0;
-
-      // completed: Completed
-      const completed = completedId
-        ? await Job.count({ where: { ...baseWhere, job_status_id: completedId } })
-        : 0;
-
-      // waiting_for_submission: in waitingSet statuses
-      const waiting_for_submission = waitingSet.length
-        ? await Job.count({ where: { ...baseWhere, job_status_id: { [Op.in]: waitingSet } } })
-        : 0;
-
-      // overdue: scheduledDateAndTime < now and not in terminal statuses Completed/Cancelled/Rejected
-      const now = new Date();
-      const excludeSet = [completedId, cancelledId, rejectedId].filter(Boolean);
-      const overdue = await Job.count({
-        where: {
-          ...baseWhere,
-          scheduledDateAndTime: { [Op.lt]: now },
-          ...(excludeSet.length ? { job_status_id: { [Op.notIn]: excludeSet } } : {}),
-        },
-      });
-
-      res.json({ yet_to_accept: yetToAccept, completed, overdue, waiting_for_submission });
-    } catch (e) {
-      next(e);
+    // Base where respecting org scope
+    const baseWhere = { ...(req.scopeWhere || {}) };
+    // Restrict technicians to their assigned/supervised jobs
+    if (roleSlug === "technician" && actorId) {
+      baseWhere[Op.or] = [{ technician_id: actorId }, { supervisor_id: actorId }];
     }
+
+    // yet_to_accept: Not Started
+    const yetToAccept = notStartedId
+      ? await Job.count({ where: { ...baseWhere, job_status_id: notStartedId } })
+      : 0;
+
+    // completed: Completed
+    const completed = completedId
+      ? await Job.count({ where: { ...baseWhere, job_status_id: completedId } })
+      : 0;
+
+    // waiting_for_submission: in waitingSet statuses
+    const waiting_for_submission = waitingSet.length
+      ? await Job.count({ where: { ...baseWhere, job_status_id: { [Op.in]: waitingSet } } })
+      : 0;
+
+    // overdue: scheduledDateAndTime + estimated duration < now and not in terminal statuses
+    const jobDesc = await getJobTableDesc();
+    const durationSegments = [];
+    if (jobDesc?.estimated_days) {
+      durationSegments.push(`COALESCE("Job"."estimated_days", 0) * 24 * 60`);
+    }
+    if (jobDesc?.estimated_hours) {
+      durationSegments.push(`COALESCE("Job"."estimated_hours", 0) * 60`);
+    }
+    if (jobDesc?.estimated_minutes) {
+      durationSegments.push(`COALESCE("Job"."estimated_minutes", 0)`);
+    }
+    const fallbackDurationExpr = durationSegments.length ? durationSegments.join(" + ") : "0";
+    const durationExpr = jobDesc?.estimated_duration
+      ? `COALESCE("Job"."estimated_duration", ${fallbackDurationExpr})`
+      : fallbackDurationExpr;
+    const deadlineExpr = `"Job"."scheduledDateAndTime" + (${durationExpr} * INTERVAL '1 minute')`;
+
+    const now = new Date();
+    const excludeSet = [completedId, cancelledId, rejectedId].filter(Boolean);
+    const overdueWhere = {
+      ...baseWhere,
+      scheduledDateAndTime: { [Op.ne]: null },
+      ...(excludeSet.length ? { job_status_id: { [Op.notIn]: excludeSet } } : {}),
+    };
+    const overdueCondition = Sequelize.where(Sequelize.literal(deadlineExpr), { [Op.lt]: now });
+    if (overdueWhere[Op.and]) {
+      overdueWhere[Op.and] = Array.isArray(overdueWhere[Op.and])
+        ? [...overdueWhere[Op.and], overdueCondition]
+        : [overdueWhere[Op.and], overdueCondition];
+    } else {
+      overdueWhere[Op.and] = [overdueCondition];
+    }
+    const overdue = await Job.count({
+      where: overdueWhere,
+    });
+
+    res.json({ yet_to_accept: yetToAccept, completed, overdue, waiting_for_submission });
+  } catch (e) {
+    next(e);
   }
-);
+});
 
 /**
  * PUT /jobs/:id
  * - Updates job fields.
  * - If job_status_id changes, appends a new JobStatusHistory row.
  */
-jobRouter.put("/:id", rbac("Manage Job", "edit"), applyOrgScope, attachmentUpload.any(), async (req, res, next) => {
-  try {
-    const idClause = buildJobIdentifierClause(req.params.id);
-    if (!idClause) return res.status(400).json({ message: "Invalid job identifier" });
-    const job = await Job.findOne({
-      where: { ...(req.scopeWhere || {}), ...idClause },
-    });
-    if (!job) return res.status(404).json({ message: "Not found" });
-
-    // Technicians can only access their own assigned/supervised jobs
-    const roleSlug = String(req.user?.role_slug || "").trim().toLowerCase();
-    const actorId = req.user?.sub || req.user?.user_id;
-    if (roleSlug === "technician" && actorId) {
-      const j = job?.toJSON ? job.toJSON() : job;
-      if (j.technician_id !== actorId && j.supervisor_id !== actorId) {
-        return res.status(404).json({ message: "Not found" });
-      }
-    }
-
-    const prevStatus = job.job_status_id;
-
-    // Normalize estimated duration on updates
-    const updates = { ...req.body };
-    delete updates.attachments;
-    delete updates.files;
-    for (const key of Object.keys(updates)) {
-      if (/^files(\[\d*\])?$/i.test(key) || /^attachments(\[\d*\])?$/i.test(key)) {
-        delete updates[key];
-      }
-    }
-
-    const rawFiles = Array.isArray(req.files) ? req.files : [];
-    const attachmentFiles = rawFiles.filter((file) => {
-      const name = String(file?.fieldname || "").toLowerCase();
-      return /^files(\[\d*\])?$/.test(name) || /^attachments(\[\d*\])?$/.test(name);
-    });
-    const hasGranular = ["estimated_days", "estimated_hours", "estimated_minutes"].some(
-      (k) => updates[k] !== undefined && updates[k] !== null
-    );
-    if (hasGranular) {
-      const d = updates.estimated_days !== undefined ? Number(updates.estimated_days) : job.estimated_days || 0;
-      const h = updates.estimated_hours !== undefined ? Number(updates.estimated_hours) : job.estimated_hours || 0;
-      const m = updates.estimated_minutes !== undefined ? Number(updates.estimated_minutes) : job.estimated_minutes || 0;
-
-      if (d < 0 || h < 0 || m < 0 || !Number.isInteger(d) || !Number.isInteger(h) || !Number.isInteger(m)) {
-        const err = new Error("estimated_days/hours/minutes must be non-negative integers");
-        err.status = 400;
-        throw err;
-      }
-      if (h > 23 || m > 59) {
-        const err = new Error("estimated_hours must be 0-23 and estimated_minutes 0-59");
-        err.status = 400;
-        throw err;
-      }
-      updates.estimated_days = d;
-      updates.estimated_hours = h;
-      updates.estimated_minutes = m;
-      updates.estimated_duration = d * 24 * 60 + h * 60 + m;
-    } else if (updates.estimated_duration !== undefined && updates.estimated_duration !== null) {
-      const total = Number(updates.estimated_duration);
-      if (!Number.isFinite(total) || total < 0) {
-        const err = new Error("estimated_duration must be a non-negative number of minutes");
-        err.status = 400;
-        throw err;
-      }
-      const d = Math.floor(total / (24 * 60));
-      const h = Math.floor((total % (24 * 60)) / 60);
-      const m = Math.floor(total % 60);
-      updates.estimated_days = d;
-      updates.estimated_hours = h;
-      updates.estimated_minutes = m;
-      updates.estimated_duration = Math.floor(total);
-    }
-
-    // Drop granular fields if DB columns are not available yet
-    const avail = await getJobColumnAvailability();
-    if (!avail.estimated_days) delete updates.estimated_days;
-    if (!avail.estimated_hours) delete updates.estimated_hours;
-    if (!avail.estimated_minutes) delete updates.estimated_minutes;
-
-    await job.update(updates, { returning: false });
-
-    if (req.body.job_status_id && req.body.job_status_id !== prevStatus) {
-      await JobStatusHistory.create({
-        job_id: job.job_id,
-        job_status_id: req.body.job_status_id,
-        is_completed: false,
+jobRouter.put(
+  "/:id",
+  rbac("Manage Job", "edit"),
+  applyOrgScope,
+  attachmentUpload.any(),
+  async (req, res, next) => {
+    try {
+      const idClause = buildJobIdentifierClause(req.params.id);
+      if (!idClause) return res.status(400).json({ message: "Invalid job identifier" });
+      const job = await Job.findOne({
+        where: { ...(req.scopeWhere || {}), ...idClause },
       });
-    }
+      if (!job) return res.status(404).json({ message: "Not found" });
 
-    let newAttachments = [];
-    if (attachmentFiles.length) {
-      newAttachments = await saveJobAttachments({
-        jobId: job.job_id,
-        files: attachmentFiles,
-        actorId,
+      // Technicians can only access their own assigned/supervised jobs
+      const roleSlug = String(req.user?.role_slug || "")
+        .trim()
+        .toLowerCase();
+      const actorId = req.user?.sub || req.user?.user_id;
+      if (roleSlug === "technician" && actorId) {
+        const j = job?.toJSON ? job.toJSON() : job;
+        if (j.technician_id !== actorId && j.supervisor_id !== actorId) {
+          return res.status(404).json({ message: "Not found" });
+        }
+      }
+
+      const prevStatus = job.job_status_id;
+
+      // Normalize estimated duration on updates
+      const updates = { ...req.body };
+      delete updates.attachments;
+      delete updates.files;
+      for (const key of Object.keys(updates)) {
+        if (/^files(\[\d*\])?$/i.test(key) || /^attachments(\[\d*\])?$/i.test(key)) {
+          delete updates[key];
+        }
+      }
+
+      const rawFiles = Array.isArray(req.files) ? req.files : [];
+      const attachmentFiles = rawFiles.filter((file) => {
+        const name = String(file?.fieldname || "").toLowerCase();
+        return /^files(\[\d*\])?$/.test(name) || /^attachments(\[\d*\])?$/.test(name);
       });
+      const hasGranular = ["estimated_days", "estimated_hours", "estimated_minutes"].some(
+        (k) => updates[k] !== undefined && updates[k] !== null
+      );
+      if (hasGranular) {
+        const d =
+          updates.estimated_days !== undefined
+            ? Number(updates.estimated_days)
+            : job.estimated_days || 0;
+        const h =
+          updates.estimated_hours !== undefined
+            ? Number(updates.estimated_hours)
+            : job.estimated_hours || 0;
+        const m =
+          updates.estimated_minutes !== undefined
+            ? Number(updates.estimated_minutes)
+            : job.estimated_minutes || 0;
+
+        if (
+          d < 0 ||
+          h < 0 ||
+          m < 0 ||
+          !Number.isInteger(d) ||
+          !Number.isInteger(h) ||
+          !Number.isInteger(m)
+        ) {
+          const err = new Error("estimated_days/hours/minutes must be non-negative integers");
+          err.status = 400;
+          throw err;
+        }
+        if (h > 23 || m > 59) {
+          const err = new Error("estimated_hours must be 0-23 and estimated_minutes 0-59");
+          err.status = 400;
+          throw err;
+        }
+        updates.estimated_days = d;
+        updates.estimated_hours = h;
+        updates.estimated_minutes = m;
+        updates.estimated_duration = d * 24 * 60 + h * 60 + m;
+      } else if (updates.estimated_duration !== undefined && updates.estimated_duration !== null) {
+        const total = Number(updates.estimated_duration);
+        if (!Number.isFinite(total) || total < 0) {
+          const err = new Error("estimated_duration must be a non-negative number of minutes");
+          err.status = 400;
+          throw err;
+        }
+        const d = Math.floor(total / (24 * 60));
+        const h = Math.floor((total % (24 * 60)) / 60);
+        const m = Math.floor(total % 60);
+        updates.estimated_days = d;
+        updates.estimated_hours = h;
+        updates.estimated_minutes = m;
+        updates.estimated_duration = Math.floor(total);
+      }
+
+      // Drop granular fields if DB columns are not available yet
+      const avail = await getJobColumnAvailability();
+      if (!avail.estimated_days) delete updates.estimated_days;
+      if (!avail.estimated_hours) delete updates.estimated_hours;
+      if (!avail.estimated_minutes) delete updates.estimated_minutes;
+
+      await job.update(updates, { returning: false });
+
+      if (req.body.job_status_id && req.body.job_status_id !== prevStatus) {
+        await JobStatusHistory.create({
+          job_id: job.job_id,
+          job_status_id: req.body.job_status_id,
+          is_completed: false,
+        });
+      }
+
+      let newAttachments = [];
+      if (attachmentFiles.length) {
+        newAttachments = await saveJobAttachments({
+          jobId: job.job_id,
+          files: attachmentFiles,
+          actorId,
+        });
+      }
+
+      const jobAttrs = await getJobAttributesList();
+      const reloaded = await Job.findOne({ where: { job_id: job.job_id }, attributes: jobAttrs });
+
+      let payload;
+      if (reloaded && typeof reloaded.toJSON === "function") {
+        payload = reloaded.toJSON();
+      } else if (reloaded) {
+        payload = reloaded;
+      } else if (job && typeof job.toJSON === "function") {
+        payload = job.toJSON();
+      } else {
+        payload = job;
+      }
+
+      if (newAttachments.length) {
+        payload.attachments = newAttachments;
+      }
+
+      res.json(payload);
+    } catch (e) {
+      next(e);
     }
-
-    const jobAttrs = await getJobAttributesList();
-    const reloaded = await Job.findOne({ where: { job_id: job.job_id }, attributes: jobAttrs });
-
-    let payload;
-    if (reloaded && typeof reloaded.toJSON === "function") {
-      payload = reloaded.toJSON();
-    } else if (reloaded) {
-      payload = reloaded;
-    } else if (job && typeof job.toJSON === "function") {
-      payload = job.toJSON();
-    } else {
-      payload = job;
-    }
-
-    if (newAttachments.length) {
-      payload.attachments = newAttachments;
-    }
-
-    res.json(payload);
-  } catch (e) {
-    next(e);
   }
-});
+);
 
 /**
  * DELETE /jobs/:id

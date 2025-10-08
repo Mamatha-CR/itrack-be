@@ -16,7 +16,7 @@ export default (sequelize) => {
 
       company_id: { type: DataTypes.UUID },
       client_id: { type: DataTypes.UUID, allowNull: false },
-      reference_number: { type: DataTypes.STRING, allowNull: true, unique: true },
+      reference_number: { type: DataTypes.STRING, allowNull: true },
 
       worktype_id: { type: DataTypes.UUID },
       jobtype_id: { type: DataTypes.UUID },
