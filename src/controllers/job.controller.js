@@ -112,6 +112,11 @@ async function fetchJobAttachments(jobId) {
   return rows.map((att) => normalizeAttachment(att)).filter(Boolean);
 }
 
+const normalizeStatusKey = (s) =>
+  String(s || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "");
+
 const MAX_JOB_ATTACHMENT_BYTES = Number(
   process.env.JOB_ATTACHMENT_MAX_BYTES || process.env.MAX_UPLOAD_BYTES || 20 * 1024 * 1024
 );
@@ -641,10 +646,18 @@ jobRouter.post("/", rbac("Manage Job", "add"), applyOrgScope, async (req, res, n
     });
 
     if (created.job_status_id) {
+      const statusRow = await JobStatus.findOne({
+        where: { job_status_id: created.job_status_id },
+      });
+      const rawRemark =
+        body.remark ?? body.remarks ?? body.status_remark ?? body.note ?? null;
+      const remark =
+        typeof rawRemark === "string" && rawRemark.trim() ? rawRemark.trim() : null;
       await JobStatusHistory.create({
         job_id: created.job_id,
         job_status_id: created.job_status_id,
-        is_completed: false,
+        is_completed: normalizeStatusKey(statusRow?.job_status_title) === "completed",
+        remarks: remark,
       });
     }
 
@@ -954,6 +967,7 @@ jobRouter.get("/:id", rbac("Manage Job", "view"), applyOrgScope, async (req, res
         job_status_title: h.JobStatus?.job_status_title,
         job_status_color_code: h.JobStatus?.job_status_color_code,
         is_completed: h.is_completed,
+        remarks: h.remarks ?? null,
         completed: norm(h.JobStatus?.job_status_title) === "completed",
         at: h.createdAt,
       })),
@@ -961,6 +975,15 @@ jobRouter.get("/:id", rbac("Manage Job", "view"), applyOrgScope, async (req, res
       chats,
       attachments,
     };
+    if (!Array.isArray(response.attachments)) response.attachments = [];
+    if (!Array.isArray(response.status_history)) response.status_history = [];
+    if (response.status_history.length) {
+      response.latest_status_history = response.status_history[response.status_history.length - 1];
+      response.latest_remarks = response.latest_status_history?.remarks ?? null;
+    } else {
+      response.latest_status_history = null;
+      response.latest_remarks = null;
+    }
 
     // Ensure no passwords leak in nested users
     if (response.technician) delete response.technician.password;
@@ -1201,17 +1224,32 @@ jobRouter.put(
 
       await job.update(updates, { returning: false });
 
+      let newHistoryEntry = null;
+      let newStatusRow = null;
       if (req.body.job_status_id && req.body.job_status_id !== prevStatus) {
-        await JobStatusHistory.create({
+        newStatusRow = await JobStatus.findOne({
+          where: { job_status_id: req.body.job_status_id },
+        });
+        const statusKey = normalizeStatusKey(newStatusRow?.job_status_title);
+        const rawRemark =
+          req.body.remark ??
+          req.body.remarks ??
+          req.body.status_remark ??
+          req.body.note ??
+          null;
+        const remark =
+          typeof rawRemark === "string" && rawRemark.trim() ? rawRemark.trim() : null;
+
+        newHistoryEntry = await JobStatusHistory.create({
           job_id: job.job_id,
           job_status_id: req.body.job_status_id,
-          is_completed: false,
+          is_completed: statusKey === "completed",
+          remarks: remark,
         });
       }
 
-      let newAttachments = [];
       if (attachmentFiles.length) {
-        newAttachments = await saveJobAttachments({
+        await saveJobAttachments({
           jobId: job.job_id,
           files: attachmentFiles,
           actorId,
@@ -1232,8 +1270,69 @@ jobRouter.put(
         payload = job;
       }
 
-      if (newAttachments.length) {
-        payload.attachments = newAttachments;
+      payload.attachments = await fetchJobAttachments(job.job_id);
+      if (!Array.isArray(payload.attachments)) payload.attachments = [];
+
+      const historyRows = await JobStatusHistory.findAll({
+        where: { job_id: job.job_id },
+        include: [{ model: JobStatus }],
+        order: [["createdAt", "ASC"]],
+      });
+      payload.status_history = historyRows.map((h) => ({
+        id: h.id,
+        job_status_id: h.job_status_id,
+        job_status_title: h.JobStatus?.job_status_title,
+        job_status_color_code: h.JobStatus?.job_status_color_code,
+        is_completed: h.is_completed,
+        remarks: h.remarks ?? null,
+        completed: normalizeStatusKey(h.JobStatus?.job_status_title) === "completed",
+        at: h.createdAt,
+      }));
+      if (!Array.isArray(payload.status_history)) payload.status_history = [];
+
+      let latestHistoryRow = null;
+      if (newHistoryEntry) {
+        if (!newStatusRow && newHistoryEntry.job_status_id) {
+          newStatusRow = await JobStatus.findOne({
+            where: { job_status_id: newHistoryEntry.job_status_id },
+          });
+        }
+        const historyEntry = {
+          id: newHistoryEntry.id,
+          job_status_id: newHistoryEntry.job_status_id,
+          is_completed: newHistoryEntry.is_completed,
+          remarks: newHistoryEntry.remarks ?? null,
+          job_status_title: newStatusRow?.job_status_title,
+          job_status_color_code: newStatusRow?.job_status_color_code,
+          completed: normalizeStatusKey(newStatusRow?.job_status_title) === "completed",
+          at: newHistoryEntry.createdAt,
+        };
+        latestHistoryRow = historyEntry;
+        payload.latest_status_history = historyEntry;
+        payload.latest_remarks = historyEntry.remarks ?? null;
+      } else {
+        const latest = await JobStatusHistory.findOne({
+          where: { job_id: job.job_id },
+          order: [["createdAt", "DESC"]],
+          include: [{ model: JobStatus }],
+        });
+        if (latest) {
+          latestHistoryRow = {
+            id: latest.id,
+            job_status_id: latest.job_status_id,
+            is_completed: latest.is_completed,
+            remarks: latest.remarks ?? null,
+            job_status_title: latest.JobStatus?.job_status_title,
+            job_status_color_code: latest.JobStatus?.job_status_color_code,
+            completed: normalizeStatusKey(latest.JobStatus?.job_status_title) === "completed",
+            at: latest.createdAt,
+          };
+          payload.latest_status_history = latestHistoryRow;
+          payload.latest_remarks = latestHistoryRow.remarks ?? null;
+        } else {
+          payload.latest_status_history = null;
+          payload.latest_remarks = null;
+        }
       }
 
       res.json(payload);

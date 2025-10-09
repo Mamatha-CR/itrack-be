@@ -5,4 +5,5 @@ export default (sequelize) =>
     job_id: { type: DataTypes.UUID, allowNull: false },
     job_status_id: { type: DataTypes.UUID },
     is_completed: { type: DataTypes.BOOLEAN, defaultValue: false },
+    remarks: { type: DataTypes.TEXT },
   });
