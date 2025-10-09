@@ -56,7 +56,7 @@ const buildAuthResponse = async (principal, type) => {
       p.company_id
         ? Company.findOne({
             where: { company_id: p.company_id },
-            attributes: ["company_id", "name"],
+            attributes: ["company_id", "name", "theme_color", "logo"],
           })
         : null,
       p.vendor_id
@@ -82,14 +82,14 @@ const buildAuthResponse = async (principal, type) => {
     company = p.company_id
       ? await Company.findOne({
           where: { company_id: p.company_id },
-          attributes: ["company_id", "name"],
+          attributes: ["company_id", "name", "theme_color"],
         })
       : null;
   } else if (type === "company") {
     company = p.company_id
       ? await Company.findOne({
           where: { company_id: p.company_id },
-          attributes: ["company_id", "name"],
+          attributes: ["company_id", "name", "theme_color", "logo"],
         })
       : null;
   }
@@ -108,9 +108,16 @@ const buildAuthResponse = async (principal, type) => {
     supervisor_name: supervisor?.name ?? null,
     shift_name: shift?.shift_name ?? null,
     region_name: region?.region_name ?? null,
-
+    company_theme_color: company?.theme_color ?? null,
+    logo: company?.logo ?? null,
     // optional: tiny embedded objects for convenience in UIs
-    company: company ? { company_id: company.company_id, name: company.name } : null,
+    company: company
+      ? {
+          company_id: company.company_id,
+          name: company.name,
+          theme_color: company.theme_color ?? null,
+        }
+      : null,
     vendor: vendor ? { vendor_id: vendor.vendor_id, name: vendor.vendor_name } : null,
     supervisor: supervisor ? { user_id: supervisor.user_id, name: supervisor.name } : null,
     shift: shift ? { shift_id: shift.shift_id, name: shift.shift_name } : null,
@@ -135,6 +142,7 @@ const buildAuthResponse = async (principal, type) => {
       type,
       role: { id: role?.role_id, name: role?.role_name, slug: role?.role_slug },
       company_id,
+      company_theme_color: company?.theme_color ?? null,
       profile, // <-- display names are now mixed into profile
     },
     permissions,

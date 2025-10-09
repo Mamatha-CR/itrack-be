@@ -21,6 +21,8 @@ import {
   JobAttachment,
   Role,
   Region,
+  Company,
+  Vendor,
 } from "../models/index.js";
 
 export const jobRouter = express.Router();
@@ -70,11 +72,35 @@ function ensureGranularDurationFields(obj) {
 function normalizeChatPayload(chat) {
   if (!chat) return null;
   const plain = chat?.toJSON ? chat.toJSON() : chat;
+  const vendor = plain.vendor_author || plain.vendorAuthor;
+  const company = plain.company_author || plain.companyAuthor;
+  const actorTypeRaw = plain.author_type || plain.actor_type;
+  const actorType = actorTypeRaw
+    ? String(actorTypeRaw).toLowerCase()
+    : company
+      ? "company"
+      : vendor
+        ? "vendor"
+        : "user";
+  const displayName =
+    plain.author?.name ||
+    vendor?.vendor_name ||
+    company?.name ||
+    null;
   return {
     id: plain.id,
-    user_id: plain.user_id,
-    user_name: plain.author?.name || null,
+    actor_type: actorType,
+    author_type: actorType,
+    user_id: plain.user_id ?? null,
+    vendor_id: plain.vendor_id ?? vendor?.vendor_id ?? null,
+    company_id: plain.company_id ?? company?.company_id ?? null,
+    user_name: displayName,
     user_photo: plain.author?.photo || null,
+    company_theme_color: company?.theme_color || null,
+    company: company
+      ? { company_id: company.company_id, name: company.name, theme_color: company.theme_color || null }
+      : null,
+    vendor: vendor ? { vendor_id: vendor.vendor_id, name: vendor.vendor_name } : null,
     message: plain.message,
     sent_at: plain.createdAt,
   };
@@ -767,7 +793,7 @@ jobRouter.get("/:id/chats", rbac("Manage Job", "view"), applyOrgScope, async (re
     if (!idClause) return res.status(400).json({ message: "Invalid job identifier" });
     const job = await Job.findOne({
       where: { ...(req.scopeWhere || {}), ...idClause },
-      attributes: ["job_id", "technician_id", "supervisor_id"],
+      attributes: ["job_id", "technician_id", "supervisor_id", "company_id"],
     });
     if (!job) return res.status(404).json({ message: "Not found" });
 
@@ -785,8 +811,12 @@ jobRouter.get("/:id/chats", rbac("Manage Job", "view"), applyOrgScope, async (re
     const messages = await JobChat.findAll({
       where: { job_id: job.job_id },
       order: [["createdAt", "ASC"]],
-      attributes: ["id", "job_id", "user_id", "message", "createdAt"],
-      include: [{ model: User, as: "author", attributes: ["user_id", "name", "photo"] }],
+      attributes: ["id", "job_id", "user_id", "vendor_id", "company_id", "author_type", "message", "createdAt"],
+      include: [
+        { model: User, as: "author", attributes: ["user_id", "name", "photo"] },
+        { model: Vendor, as: "vendor_author", attributes: ["vendor_id", "vendor_name"] },
+        { model: Company, as: "company_author", attributes: ["company_id", "name", "theme_color"] },
+      ],
     });
 
     res.json(messages.map((msg) => normalizeChatPayload(msg)).filter(Boolean));
@@ -821,10 +851,38 @@ jobRouter.post("/:id/chats", rbac("Manage Job", "view"), applyOrgScope, async (r
     if (!message) return res.status(400).json({ message: "Message is required" });
     if (message.length > 2000) return res.status(400).json({ message: "Message too long" });
 
-    const created = await JobChat.create({ job_id: job.job_id, user_id: actorId, message });
+    const accountType = String(req.user?.type || roleSlug || "").trim().toLowerCase();
+    const chatData = {
+      job_id: job.job_id,
+      message,
+      author_type: accountType || "user",
+      company_id: null,
+      vendor_id: null,
+      user_id: null,
+    };
+
+    if (accountType === "vendor") {
+      chatData.vendor_id = actorId;
+      chatData.company_id = req.user?.company_id || job.company_id || null;
+    } else if (accountType === "company") {
+      chatData.company_id = req.user?.company_id || actorId;
+    } else {
+      chatData.user_id = actorId;
+      chatData.company_id = req.user?.company_id || job.company_id || null;
+    }
+
+    if (!chatData.user_id && !chatData.vendor_id && !chatData.company_id) {
+      return res.status(400).json({ message: "Unable to determine chat author" });
+    }
+
+    const created = await JobChat.create(chatData);
     await created.reload({
-      attributes: ["id", "job_id", "user_id", "message", "createdAt"],
-      include: [{ model: User, as: "author", attributes: ["user_id", "name", "photo"] }],
+      attributes: ["id", "job_id", "user_id", "vendor_id", "company_id", "author_type", "message", "createdAt"],
+      include: [
+        { model: User, as: "author", attributes: ["user_id", "name", "photo"] },
+        { model: Vendor, as: "vendor_author", attributes: ["vendor_id", "vendor_name"] },
+        { model: Company, as: "company_author", attributes: ["company_id", "name", "theme_color"] },
+      ],
     });
 
     res.status(201).json(normalizeChatPayload(created));
@@ -860,8 +918,12 @@ jobRouter.get("/:id", rbac("Manage Job", "view"), applyOrgScope, async (req, res
           as: "chats",
           separate: true,
           order: [["createdAt", "ASC"]],
-          attributes: ["id", "job_id", "user_id", "message", "createdAt"],
-          include: [{ model: User, as: "author", attributes: ["user_id", "name", "photo"] }],
+          attributes: ["id", "job_id", "user_id", "vendor_id", "company_id", "author_type", "message", "createdAt"],
+          include: [
+            { model: User, as: "author", attributes: ["user_id", "name", "photo"] },
+            { model: Vendor, as: "vendor_author", attributes: ["vendor_id", "vendor_name"] },
+            { model: Company, as: "company_author", attributes: ["company_id", "name", "theme_color"] },
+          ],
         },
         {
           model: JobAttachment,

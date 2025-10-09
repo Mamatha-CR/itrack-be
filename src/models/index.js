@@ -109,8 +109,12 @@ JobChat.belongsTo(Job, { foreignKey: "job_id", onDelete: "CASCADE" });
 Job.hasMany(JobAttachment, { as: "attachments", foreignKey: "job_id", onDelete: "CASCADE", hooks: true });
 JobAttachment.belongsTo(Job, { foreignKey: "job_id", onDelete: "CASCADE" });
 JobAttachment.belongsTo(User, { as: "uploader", foreignKey: "uploaded_by", onDelete: "SET NULL" });
-JobChat.belongsTo(User, { as: "author", foreignKey: "user_id", onDelete: "CASCADE" });
+JobChat.belongsTo(User, { as: "author", foreignKey: "user_id", onDelete: "SET NULL" });
 User.hasMany(JobChat, { as: "job_chats", foreignKey: "user_id" });
+JobChat.belongsTo(Vendor, { as: "vendor_author", foreignKey: "vendor_id", onDelete: "SET NULL" });
+Vendor.hasMany(JobChat, { as: "job_chats", foreignKey: "vendor_id" });
+JobChat.belongsTo(Company, { as: "company_author", foreignKey: "company_id", onDelete: "SET NULL" });
+Company.hasMany(JobChat, { as: "company_job_chats", foreignKey: "company_id" });
 User.hasMany(JobAttachment, { as: "uploaded_attachments", foreignKey: "uploaded_by" });
 
 // Attendance associations
