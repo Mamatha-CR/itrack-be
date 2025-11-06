@@ -119,6 +119,18 @@ User.hasMany(JobAttachment, { as: "uploaded_attachments", foreignKey: "uploaded_
 
 // Attendance associations
 Attendance.belongsTo(Company, { foreignKey: "company_id" });
+
+WorkType.belongsTo(Company, { foreignKey: "company_id", as: "company" });
+Company.hasMany(WorkType, { foreignKey: "company_id", as: "work_types" });
+
+JobType.belongsTo(Company, { foreignKey: "company_id", as: "company" });
+Company.hasMany(JobType, { foreignKey: "company_id", as: "job_types" });
+
+Region.belongsTo(Company, { foreignKey: "company_id", as: "company" });
+Company.hasMany(Region, { foreignKey: "company_id", as: "regions" });
+
+Shift.belongsTo(Company, { foreignKey: "company_id", as: "company" });
+Company.hasMany(Shift, { foreignKey: "company_id", as: "shifts" });
 Attendance.belongsTo(User, { foreignKey: "user_id", as: "user" });
 User.hasMany(Attendance, { foreignKey: "user_id" });
 

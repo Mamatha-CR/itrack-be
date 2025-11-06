@@ -95,13 +95,53 @@ export function errorHandler(err, req, res, next) {
 
   // NOT NULL violation
   if (pgCode === "23502" || /notNull Violation/i.test(msg)) {
+    const errors = Array.isArray(err?.errors) ? err.errors : [];
+
+    const firstErrorPath = errors.find((item) => item?.path)?.path;
+    const columnFromErrorArray = firstErrorPath
+      ? String(firstErrorPath).split(".").pop()
+      : undefined;
+    const columnFromOriginal =
+      err?.original?.column ||
+      err?.parent?.column ||
+      (err?.fields && Object.keys(err.fields || {})[0]);
+
     // Try to extract column name from detail like: "null value in column \"email\" of relation ..."
-    const m = detail.match(/column \"([^\"]+)\"/i) || msg.match(/\.(\w+) cannot be null/i);
-    const column = m ? m[1] : undefined;
-    const field = String(column || "field");
-    const nice = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1).replace(/_/g, " ") : "Field");
+    const matchDetail = detail.match(/column \"([^\"]+)\"/i);
+    const matchMessage = msg.match(/\.(\w+) cannot be null/i);
+
+    const column =
+      columnFromErrorArray ||
+      columnFromOriginal ||
+      (matchDetail ? matchDetail[1] : undefined) ||
+      (matchMessage ? matchMessage[1] : undefined);
+
+    const cleanField = (value) => {
+      if (!value) return undefined;
+      const plain = String(value).trim();
+      if (!plain) return undefined;
+      return plain.split(".").pop();
+    };
+
+    const field = cleanField(column) || "field";
+    const nice = (s) =>
+      s ? s.charAt(0).toUpperCase() + s.slice(1).replace(/[_\.]/g, " ") : "Field";
     const message = `${nice(field)} is required`;
-    return res.status(400).json({ message, field, code: "NOT_NULL_VIOLATION" });
+
+    const payload = { message, field, code: "NOT_NULL_VIOLATION" };
+    if (field && field !== "field") {
+      payload.fields = { [field]: message };
+    } else if (errors.length) {
+      const entries = errors
+        .filter((item) => item?.path)
+        .map((item) => {
+          const k = cleanField(item.path);
+          return [k || item.path, item.message || `${nice(k || item.path)} is required`];
+        });
+      if (entries.length) payload.fields = Object.fromEntries(entries);
+    }
+
+    return res.status(400).json(payload);
   }
 
   // Multer file upload errors

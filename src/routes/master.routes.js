@@ -12,6 +12,10 @@ import {
   Role,
   Screen,
   RoleScreenPermission,
+  User,
+  Job,
+  Company,
+  Vendor,
 } from "../models/index.js";
 import { rbac } from "../middleware/rbac.js";
 import { Sequelize } from "sequelize";
@@ -156,6 +160,18 @@ masterRouter.use(
     searchFields: ["worktype_name", "worktype_description"],
     exactFields: ["status", "company_id"], // super_admin can filter; org users auto-scoped
     statusFieldName: "status",
+    listInclude: [
+      { model: Company, as: "company", attributes: ["company_id", "name"], required: false },
+    ],
+    viewInclude: [
+      { model: Company, as: "company", attributes: ["company_id", "name"], required: false },
+    ],
+    listAttributes: {
+      include: [[Sequelize.col("company.name"), "company_name"]],
+    },
+    viewAttributes: {
+      include: [[Sequelize.col("company.name"), "company_name"]],
+    },
     normalize: (body) => {
       if (typeof body.worktype_name === "string") body.worktype_name = body.worktype_name.trim();
     },
@@ -175,6 +191,18 @@ masterRouter.use(
     searchFields: ["jobtype_name", "description"],
     exactFields: ["status", "company_id", "worktype_id"],
     statusFieldName: "status",
+    listInclude: [
+      { model: Company, as: "company", attributes: ["company_id", "name"], required: false },
+    ],
+    viewInclude: [
+      { model: Company, as: "company", attributes: ["company_id", "name"], required: false },
+    ],
+    listAttributes: {
+      include: [[Sequelize.col("company.name"), "company_name"]],
+    },
+    viewAttributes: {
+      include: [[Sequelize.col("company.name"), "company_name"]],
+    },
     normalize: (body) => {
       if (typeof body.jobtype_name === "string") body.jobtype_name = body.jobtype_name.trim();
     },
@@ -194,6 +222,18 @@ masterRouter.use(
     searchFields: ["region_name"],
     exactFields: ["status", "company_id", "country_id", "state_id", "district_id"],
     statusFieldName: "status",
+    listInclude: [
+      { model: Company, as: "company", attributes: ["company_id", "name"], required: false },
+    ],
+    viewInclude: [
+      { model: Company, as: "company", attributes: ["company_id", "name"], required: false },
+    ],
+    listAttributes: {
+      include: [[Sequelize.col("company.name"), "company_name"]],
+    },
+    viewAttributes: {
+      include: [[Sequelize.col("company.name"), "company_name"]],
+    },
 
     normalize: (body) => {
       if (typeof body.region_name === "string") body.region_name = body.region_name.trim();
@@ -359,6 +399,18 @@ masterRouter.use(
     searchFields: ["shift_name", "description"],
     exactFields: ["status", "company_id"],
     statusFieldName: "status",
+    listInclude: [
+      { model: Company, as: "company", attributes: ["company_id", "name"], required: false },
+    ],
+    viewInclude: [
+      { model: Company, as: "company", attributes: ["company_id", "name"], required: false },
+    ],
+    listAttributes: {
+      include: [[Sequelize.col("company.name"), "company_name"]],
+    },
+    viewAttributes: {
+      include: [[Sequelize.col("company.name"), "company_name"]],
+    },
     normalize: (body) => {
       if (typeof body.shift_name === "string") body.shift_name = body.shift_name.trim();
       if (typeof body.shift_startTime === "string")
@@ -445,3 +497,117 @@ masterRouter.put(
     }
   }
 );
+
+masterRouter.get("/dashboard/counts", rbac("Dashboard", "view"), async (req, res, next) => {
+  try {
+    const isSuperAdmin = req.user?.role_slug === "super_admin";
+    const requestedCompanyId =
+      typeof req.query?.company_id === "string" && req.query.company_id.trim()
+        ? req.query.company_id.trim()
+        : null;
+    const companyId = isSuperAdmin ? requestedCompanyId : req.user?.company_id || null;
+
+    const activeRolesWhere = {
+      status: true,
+      role_slug: { [Op.ne]: "super_admin" },
+    };
+
+    const userWhere = {
+      status: true,
+      role_id: { [Op.ne]: null },
+    };
+    if (companyId) userWhere.company_id = companyId;
+
+    const jobWhere = {};
+    if (companyId) jobWhere.company_id = companyId;
+
+    const companyWhere = { status: true };
+    const vendorWhere = { status: true };
+    if (companyId) {
+      companyWhere.company_id = companyId;
+      vendorWhere.company_id = companyId;
+    }
+
+    const [roles, roleCountsRaw, vendorCountsRaw, companyTotal, completedStatus, totalJobs] =
+      await Promise.all([
+        Role.findAll({
+          attributes: ["role_id", "role_name", "role_slug"],
+          where: activeRolesWhere,
+          order: [["role_name", "ASC"]],
+        }),
+        User.findAll({
+          attributes: ["role_id", [Sequelize.fn("COUNT", Sequelize.col("User.user_id")), "count"]],
+          where: userWhere,
+          group: ["role_id"],
+        }),
+        Vendor.findAll({
+          attributes: [
+            "role_id",
+            [Sequelize.fn("COUNT", Sequelize.col("Vendor.vendor_id")), "count"],
+          ],
+          where: vendorWhere,
+          group: ["role_id"],
+        }),
+        Company.count({ where: companyWhere }),
+        JobStatus.findOne({
+          attributes: ["job_status_id"],
+          where: {
+            status: true,
+            [Op.and]: [
+              Sequelize.where(
+                Sequelize.fn("LOWER", Sequelize.col("job_status_title")),
+                "completed"
+              ),
+            ],
+          },
+        }),
+        Job.count({ where: jobWhere }),
+      ]);
+
+    const countsMap = new Map();
+
+    const setMaxCount = (roleId, value) => {
+      if (!roleId) return;
+      const safeValue = Number(value || 0);
+      const prev = countsMap.get(roleId) || 0;
+      countsMap.set(roleId, Math.max(prev, safeValue));
+    };
+
+    for (const row of roleCountsRaw) {
+      setMaxCount(row.get("role_id"), row.get("count"));
+    }
+
+    for (const row of vendorCountsRaw) {
+      setMaxCount(row.get("role_id"), row.get("count"));
+    }
+
+    const companyAdminRole = roles.find((r) => r.role_slug === "company_admin");
+    if (companyAdminRole) {
+      setMaxCount(companyAdminRole.role_id, companyTotal);
+    }
+
+    const roleSummaries = roles.map((role) => {
+      const data = role.toJSON();
+      return {
+        role_name: data.role_name,
+        count: countsMap.get(data.role_id) || 0,
+      };
+    });
+
+    let completedJobs = 0;
+    if (completedStatus) {
+      completedJobs = await Job.count({
+        where: { ...jobWhere, job_status_id: completedStatus.get("job_status_id") },
+      });
+    }
+
+    res.json({
+      company_id: companyId,
+      roles: roleSummaries,
+      total_jobs: totalJobs,
+      completed_jobs: completedJobs,
+    });
+  } catch (e) {
+    next(e);
+  }
+});

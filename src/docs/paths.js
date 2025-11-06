@@ -476,6 +476,41 @@
 
 /**
  * @swagger
+ * /masters/dashboard/counts:
+ *   get:
+ *     tags: [Masters]
+ *     summary: Count roles and jobs
+ *     description: Returns active role counts (excluding super admin) and job totals for the scoped company.
+ *     security: [ { bearerAuth: [] } ]
+ *     parameters:
+ *       - in: query
+ *         name: company_id
+ *         schema: { type: string, format: uuid }
+ *         description: Optional company scope for super administrators.
+ *     responses:
+ *       200:
+ *         description: Count summary
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 company_id: { type: string, format: uuid, nullable: true }
+ *                 roles:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       role_id: { type: string, format: uuid }
+ *                       role_name: { type: string }
+ *                       role_slug: { type: string }
+ *                       count: { type: integer, example: 5 }
+ *                 total_jobs: { type: integer, example: 42 }
+ *                 completed_jobs: { type: integer, example: 17 }
+ */
+
+/**
+ * @swagger
  * /masters/nature-of-work:
  *   get:
  *     tags: [Masters]

@@ -5,7 +5,18 @@ import { rbac } from "../middleware/rbac.js";
 import { Op, fn, col, literal } from "sequelize";
 import { buildCrudRoutes } from "../utils/crudFactory.js";
 import { parseListQuery } from "../middleware/pagination.js";
-import { Company, Vendor, User, Client, Role, Shift, Region, Attendance } from "../models/index.js";
+import {
+  Company,
+  Vendor,
+  User,
+  Client,
+  Role,
+  Shift,
+  Region,
+  Attendance,
+  WorkType,
+  JobType,
+} from "../models/index.js";
 import { uploadBufferToS3 } from "../utils/s3.js";
 
 export const adminRouter = express.Router();
