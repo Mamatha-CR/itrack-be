@@ -286,14 +286,15 @@ async function seedMasters() {
   // Job Statuses (optional colors; tweak as you like)
   const jobStatuses = [
     { title: "Not Started", color: "#2F80ED", order: 1 },
-    { title: "Assigned Tech", color: "#47A63A", order: 2 },
-    { title: "EnRoute", color: "#6366F1", order: 3 },
-    { title: "OnSite", color: "#0EA5E9", order: 4 },
-    { title: "OnHold", color: "#2F80ED", order: 5 },
-    { title: "OnResume", color: "#2F80ED", order: 6 },
-    { title: "Completed", color: "#47A63A", order: 7 },
-    { title: "Cancelled", color: "#ADADAD", order: 8 },
-    { title: "UnResolved", color: "#F97316", order: 9 },
+    { title: "Waiting For Approval", color: "#F2C94C", order: 2 },
+    { title: "Assigned Tech", color: "#47A63A", order: 3 },
+    { title: "EnRoute", color: "#6366F1", order: 4 },
+    { title: "OnSite", color: "#0EA5E9", order: 5 },
+    { title: "OnHold", color: "#2F80ED", order: 6 },
+    { title: "OnResume", color: "#2F80ED", order: 7 },
+    { title: "Completed", color: "#47A63A", order: 8 },
+    { title: "Cancelled", color: "#ADADAD", order: 9 },
+    { title: "UnResolved", color: "#F97316", order: 10 },
     // Keep Rejected for decline action (not in main order)
     { title: "Rejected", color: "#FF7878", order: 99 },
   ];

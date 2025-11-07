@@ -23,6 +23,8 @@ import {
   Region,
   Company,
   Vendor,
+  Country,
+  State,
 } from "../models/index.js";
 
 export const jobRouter = express.Router();
@@ -67,6 +69,24 @@ function ensureGranularDurationFields(obj) {
     if (!hasM) obj.estimated_minutes = m;
   }
   return obj;
+}
+
+function attachLocationLabels(entity) {
+  if (!entity || typeof entity !== "object") return entity;
+  const setIfMissing = (target, key, value) => {
+    if (target[key] == null && value != null) target[key] = value;
+  };
+  if (entity.state) {
+    setIfMissing(entity, "state_id", entity.state.state_id);
+    setIfMissing(entity, "state_name", entity.state.state_name);
+  }
+  if (entity.country) {
+    setIfMissing(entity, "country_id", entity.country.country_id);
+    setIfMissing(entity, "country_name", entity.country.country_name);
+  }
+  delete entity.state;
+  delete entity.country;
+  return entity;
 }
 
 function normalizeChatPayload(chat) {
@@ -905,13 +925,51 @@ jobRouter.get("/:id", rbac("Manage Job", "view"), applyOrgScope, async (req, res
     const job = await Job.findOne({
       where: { ...(req.scopeWhere || {}), ...idClause },
       attributes: jobAttrs,
-      include: [
-        { model: Client, as: "client" },
-        { model: User, as: "technician", attributes: { exclude: ["password"] } },
-        { model: User, as: "supervisor", attributes: { exclude: ["password"] } },
-        { model: WorkType, as: "work_type" },
-        { model: JobType, as: "job_type" },
-        { model: NatureOfWork, as: "nature_of_work" },
+        include: [
+          {
+            model: Client,
+            as: "client",
+            include: [
+              { model: State, as: "state", attributes: ["state_id", "state_name"], required: false },
+              {
+                model: Country,
+                as: "country",
+                attributes: ["country_id", "country_name"],
+                required: false,
+              },
+            ],
+          },
+          {
+            model: User,
+            as: "technician",
+            attributes: { exclude: ["password"] },
+            include: [
+              { model: State, as: "state", attributes: ["state_id", "state_name"], required: false },
+              {
+                model: Country,
+                as: "country",
+                attributes: ["country_id", "country_name"],
+                required: false,
+              },
+            ],
+          },
+          {
+            model: User,
+            as: "supervisor",
+            attributes: { exclude: ["password"] },
+            include: [
+              { model: State, as: "state", attributes: ["state_id", "state_name"], required: false },
+              {
+                model: Country,
+                as: "country",
+                attributes: ["country_id", "country_name"],
+                required: false,
+              },
+            ],
+          },
+          { model: WorkType, as: "work_type" },
+          { model: JobType, as: "job_type" },
+          { model: NatureOfWork, as: "nature_of_work" },
         { model: JobStatus, as: "job_status" },
         {
           model: JobChat,
@@ -954,11 +1012,14 @@ jobRouter.get("/:id", rbac("Manage Job", "view"), applyOrgScope, async (req, res
       order: [["createdAt", "ASC"]],
     });
 
-    const jobPlain = job?.toJSON ? job.toJSON() : job;
-    ensureGranularDurationFields(jobPlain);
-    const chats = Array.isArray(jobPlain.chats)
-      ? jobPlain.chats.map((chat) => normalizeChatPayload(chat)).filter(Boolean)
-      : [];
+      const jobPlain = job?.toJSON ? job.toJSON() : job;
+      ensureGranularDurationFields(jobPlain);
+      attachLocationLabels(jobPlain?.client);
+      attachLocationLabels(jobPlain?.technician);
+      attachLocationLabels(jobPlain?.supervisor);
+      const chats = Array.isArray(jobPlain.chats)
+        ? jobPlain.chats.map((chat) => normalizeChatPayload(chat)).filter(Boolean)
+        : [];
     let attachments = Array.isArray(jobPlain.attachments)
       ? jobPlain.attachments.map((att) => normalizeAttachment(att)).filter(Boolean)
       : [];

@@ -80,6 +80,8 @@ Vendor.belongsTo(Region, {
 
 Client.belongsTo(Company, { foreignKey: "company_id" });
 Client.belongsTo(BusinessType, { foreignKey: "business_typeId" });
+Client.belongsTo(State, { foreignKey: "state_id", as: "state" });
+Client.belongsTo(Country, { foreignKey: "country_id", as: "country" });
 
 User.belongsTo(Company, { foreignKey: "company_id" });
 User.belongsTo(Role, { foreignKey: "role_id" });
@@ -87,6 +89,8 @@ User.belongsTo(User, { as: "supervisor", foreignKey: "supervisor_id" });
 User.belongsTo(Vendor, { foreignKey: "vendor_id" });
 User.belongsTo(Shift, { foreignKey: "shift_id" });
 User.belongsTo(Region, { foreignKey: "region_id", as: "region" });
+User.belongsTo(State, { foreignKey: "state_id", as: "state" });
+User.belongsTo(Country, { foreignKey: "country_id", as: "country" });
 
 Job.belongsTo(Company, { foreignKey: "company_id" });
 Job.belongsTo(Client, { foreignKey: "client_id", as: "client" });
