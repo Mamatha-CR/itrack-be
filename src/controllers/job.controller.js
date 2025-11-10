@@ -217,6 +217,85 @@ async function saveJobAttachments({ jobId, files, actorId, keyPrefix }) {
   return created;
 }
 
+function normalizeAttachmentMetadata(raw) {
+  if (!raw) return [];
+  let list = raw;
+  if (typeof raw === "string") {
+    try {
+      const parsed = JSON.parse(raw);
+      list = parsed;
+    } catch {
+      return [];
+    }
+  }
+  if (!Array.isArray(list)) return [];
+  return list
+    .map((item) => {
+      if (!item || typeof item !== "object") return null;
+      const url = typeof item.url === "string" ? item.url.trim() : null;
+      const key = typeof item.key === "string" ? item.key.trim() : null;
+      if (!url && !key) return null;
+      const deriveName = () => {
+        if (typeof item.name === "string" && item.name.trim()) return item.name.trim();
+        if (key) return key.split("/").pop();
+        if (url) {
+          try {
+            const pathname = new URL(url).pathname;
+            const parts = pathname.split("/").filter(Boolean);
+            return parts[parts.length - 1] || "attachment";
+          } catch {
+            return url.split("/").pop() || "attachment";
+          }
+        }
+        return "attachment";
+      };
+      const contentType =
+        typeof item.contentType === "string"
+          ? item.contentType
+          : typeof item.content_type === "string"
+            ? item.content_type
+            : typeof item.mimeType === "string"
+              ? item.mimeType
+              : typeof item.mimetype === "string"
+                ? item.mimetype
+                : null;
+      const fileSize =
+        typeof item.file_size === "number"
+          ? item.file_size
+          : typeof item.size === "number"
+            ? item.size
+            : null;
+      return {
+        url,
+        s3_key: key || null,
+        file_name: deriveName(),
+        content_type: contentType,
+        file_size: fileSize,
+      };
+    })
+    .filter(Boolean);
+}
+
+async function saveAttachmentMetadataRecords({ jobId, attachments, actorId }) {
+  if (!jobId || !Array.isArray(attachments) || !attachments.length) return [];
+  const created = [];
+  for (const att of attachments) {
+    if (!att?.url && !att?.s3_key) continue;
+    const payload = {
+      job_id: jobId,
+      url: att.url,
+      s3_key: att.s3_key || null,
+      file_name: att.file_name || "attachment",
+      content_type: att.content_type || null,
+      file_size: att.file_size ?? null,
+      uploaded_by: actorId || null,
+    };
+    const row = await JobAttachment.create(payload);
+    created.push(row);
+  }
+  return created;
+}
+
 const UUID_REGEX = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
 function buildJobIdentifierClause(rawId) {
@@ -1272,6 +1351,9 @@ jobRouter.put(
 
       // Normalize estimated duration on updates
       const updates = { ...req.body };
+      const metadataAttachments = normalizeAttachmentMetadata(
+        req.body?.attachments ?? req.body?.attachment_metadata ?? null
+      );
       delete updates.attachments;
       delete updates.files;
       for (const key of Object.keys(updates)) {
@@ -1375,6 +1457,13 @@ jobRouter.put(
         await saveJobAttachments({
           jobId: job.job_id,
           files: attachmentFiles,
+          actorId,
+        });
+      }
+      if (metadataAttachments.length) {
+        await saveAttachmentMetadataRecords({
+          jobId: job.job_id,
+          attachments: metadataAttachments,
           actorId,
         });
       }
