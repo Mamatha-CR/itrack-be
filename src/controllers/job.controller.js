@@ -46,6 +46,7 @@ async function getJobColumnAvailability() {
     estimated_days: !!desc.estimated_days,
     estimated_hours: !!desc.estimated_hours,
     estimated_minutes: !!desc.estimated_minutes,
+    job_photo: !!desc.job_photo,
   };
 }
 async function getJobAttributesList() {
@@ -180,6 +181,96 @@ const attachmentUpload = multer({
     cb(null, true);
   },
 });
+
+const JOB_PHOTO_FIELD_NAMES = ["job_photo", "jobphoto", "jobPhoto"];
+const JOB_PHOTO_REMOVE_KEYS = [
+  "remove_job_photo",
+  "job_photo_remove",
+  "job_photo_clear",
+  "jobPhotoRemove",
+  "jobPhotoClear",
+];
+const JOB_PHOTO_ALLOWED_MIME = /^image\//i;
+
+const JOB_PHOTO_REMOVE_VALUES = new Set(["1", "true", "yes", "y", "remove", "clear"]);
+
+function getJobPhotoKeyPrefix() {
+  return process.env.S3_KEY_PREFIX_JOB_PHOTO || "uploads/jobs/photo/";
+}
+
+function findJobPhotoFile(files) {
+  if (!Array.isArray(files) || !files.length) return null;
+  return (
+    files.find((file) => {
+      const field = String(file?.fieldname || "").toLowerCase();
+      return JOB_PHOTO_FIELD_NAMES.includes(field);
+    }) || null
+  );
+}
+
+function coerceTruthyFlag(value) {
+  if (value === true) return true;
+  if (value === false || value == null) return false;
+  if (typeof value === "number") return value === 1;
+  const normalized = String(value).trim().toLowerCase();
+  return JOB_PHOTO_REMOVE_VALUES.has(normalized);
+}
+
+function consumeJobPhotoRemovalFlag(target = {}) {
+  let shouldRemove = false;
+  for (const key of JOB_PHOTO_REMOVE_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(target, key)) {
+      if (coerceTruthyFlag(target[key])) shouldRemove = true;
+      delete target[key];
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(target, "job_photo")) {
+    const value = target.job_photo;
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      if (!trimmed) {
+        delete target.job_photo;
+        shouldRemove = true;
+      } else {
+        target.job_photo = trimmed;
+      }
+    } else if (value == null) {
+      delete target.job_photo;
+      shouldRemove = true;
+    }
+  }
+  return shouldRemove;
+}
+
+async function applyJobPhotoMutation({ files, target, allowPersistPhoto }) {
+  if (!target) return;
+  const shouldRemove = consumeJobPhotoRemovalFlag(target);
+  if (!allowPersistPhoto) {
+    delete target.job_photo;
+    return;
+  }
+  const file = findJobPhotoFile(files);
+  if (file) {
+    if (!JOB_PHOTO_ALLOWED_MIME.test(file.mimetype || "")) {
+      const err = new Error("Job photo must be an image file");
+      err.status = 400;
+      throw err;
+    }
+    const upload = await uploadBufferToS3({
+      buffer: file.buffer,
+      filename: file.originalname,
+      contentType: file.mimetype,
+      keyPrefix: getJobPhotoKeyPrefix(),
+    });
+    target.job_photo = upload.url;
+    return;
+  }
+  if (shouldRemove) {
+    target.job_photo = null;
+  } else if (target.job_photo === undefined) {
+    delete target.job_photo;
+  }
+}
 
 async function saveJobAttachments({ jobId, files, actorId, keyPrefix }) {
   const items = Array.isArray(files) ? files.filter((f) => f && f.buffer) : [];
@@ -621,11 +712,24 @@ jobRouter.get("/summary", rbac("Manage Job", "view"), applyOrgScope, async (req,
  * POST /jobs
  * - Org scoping: non-super_admin company_id is forced from token.
  * - reference_number auto-generated if absent.
+ * - Supports optional job_photo upload (multipart).
  * - Creates a JobStatusHistory entry when an initial job_status_id is provided.
  */
-jobRouter.post("/", rbac("Manage Job", "add"), applyOrgScope, async (req, res, next) => {
+jobRouter.post(
+  "/",
+  rbac("Manage Job", "add"),
+  applyOrgScope,
+  attachmentUpload.any(),
+  async (req, res, next) => {
   try {
     const body = { ...req.body };
+    const files = Array.isArray(req.files) ? req.files : [];
+    const columnAvailability = await getJobColumnAvailability();
+    await applyJobPhotoMutation({
+      files,
+      target: body,
+      allowPersistPhoto: columnAvailability.job_photo,
+    });
 
     if (req.user?.role_slug !== "super_admin") body.company_id = req.user.company_id;
     const companyId = body.company_id;
@@ -756,10 +860,10 @@ jobRouter.post("/", rbac("Manage Job", "add"), applyOrgScope, async (req, res, n
     }
 
     // Drop granular fields if DB columns are not available yet
-    const avail = await getJobColumnAvailability();
-    if (!avail.estimated_days) delete body.estimated_days;
-    if (!avail.estimated_hours) delete body.estimated_hours;
-    if (!avail.estimated_minutes) delete body.estimated_minutes;
+    if (!columnAvailability.estimated_days) delete body.estimated_days;
+    if (!columnAvailability.estimated_hours) delete body.estimated_hours;
+    if (!columnAvailability.estimated_minutes) delete body.estimated_minutes;
+    if (!columnAvailability.job_photo) delete body.job_photo;
 
     const created = await Job.create(body, { returning: false });
 
@@ -790,7 +894,8 @@ jobRouter.post("/", rbac("Manage Job", "add"), applyOrgScope, async (req, res, n
   } catch (e) {
     next(e);
   }
-});
+  }
+);
 
 jobRouter.get(
   "/:id/attachments",
@@ -1348,9 +1453,16 @@ jobRouter.put(
       }
 
       const prevStatus = job.job_status_id;
+      const columnAvailability = await getJobColumnAvailability();
 
       // Normalize estimated duration on updates
       const updates = { ...req.body };
+      const rawFiles = Array.isArray(req.files) ? req.files : [];
+      await applyJobPhotoMutation({
+        files: rawFiles,
+        target: updates,
+        allowPersistPhoto: columnAvailability.job_photo,
+      });
       const metadataAttachments = normalizeAttachmentMetadata(
         req.body?.attachments ?? req.body?.attachment_metadata ?? null
       );
@@ -1362,7 +1474,6 @@ jobRouter.put(
         }
       }
 
-      const rawFiles = Array.isArray(req.files) ? req.files : [];
       const attachmentFiles = rawFiles.filter((file) => {
         const name = String(file?.fieldname || "").toLowerCase();
         return /^files(\[\d*\])?$/.test(name) || /^attachments(\[\d*\])?$/.test(name);
@@ -1422,10 +1533,10 @@ jobRouter.put(
       }
 
       // Drop granular fields if DB columns are not available yet
-      const avail = await getJobColumnAvailability();
-      if (!avail.estimated_days) delete updates.estimated_days;
-      if (!avail.estimated_hours) delete updates.estimated_hours;
-      if (!avail.estimated_minutes) delete updates.estimated_minutes;
+      if (!columnAvailability.estimated_days) delete updates.estimated_days;
+      if (!columnAvailability.estimated_hours) delete updates.estimated_hours;
+      if (!columnAvailability.estimated_minutes) delete updates.estimated_minutes;
+      if (!columnAvailability.job_photo) delete updates.job_photo;
 
       await job.update(updates, { returning: false });
 

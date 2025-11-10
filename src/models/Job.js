@@ -21,6 +21,7 @@ export default (sequelize) => {
       worktype_id: { type: DataTypes.UUID },
       jobtype_id: { type: DataTypes.UUID },
       job_description: { type: DataTypes.TEXT },
+      job_photo: { type: DataTypes.STRING },
 
       estimated_duration: { type: DataTypes.INTEGER },
       estimated_days: { type: DataTypes.INTEGER, defaultValue: 0 },
