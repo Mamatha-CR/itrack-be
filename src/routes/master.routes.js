@@ -53,14 +53,15 @@ masterRouter.get("/job-statuses/ordered", rbac("Manage Job", "view"), async (req
         .replace(/[^a-z0-9]+/g, "");
     const desiredOrder = {
       notstarted: 1,
-      assignedtech: 2,
-      enroute: 3,
-      onsite: 4,
-      onhold: 5,
-      onresume: 6,
-      completed: 7,
-      cancelled: 8,
-      unresolved: 9,
+      waitingforapproval: 2,
+      assignedtech: 3,
+      enroute: 4,
+      onsite: 5,
+      onhold: 6,
+      onresume: 7,
+      completed: 8,
+      cancelled: 9,
+      unresolved: 10,
       // reject is outside main flow
       rejected: 99,
     };
