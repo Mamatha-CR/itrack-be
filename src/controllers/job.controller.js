@@ -273,7 +273,7 @@ async function applyJobPhotoMutation({ files, target, allowPersistPhoto }) {
   }
 }
 
-async function saveJobAttachments({ jobId, files, actorId, keyPrefix }) {
+async function saveJobAttachments({ jobId, files, actorId, keyPrefix, defaultRemark }) {
   const items = Array.isArray(files) ? files.filter((f) => f && f.buffer) : [];
   if (!items.length) return [];
   if (items.length > MAX_JOB_ATTACHMENT_FILES) {
@@ -289,7 +289,9 @@ async function saveJobAttachments({ jobId, files, actorId, keyPrefix }) {
     const remark =
       typeof file?.remark === "string" && file.remark.trim()
         ? file.remark.trim()
-        : null;
+        : typeof defaultRemark === "string" && defaultRemark.trim()
+          ? defaultRemark.trim()
+          : null;
     const result = await uploadBufferToS3({
       buffer,
       contentType: mimetype,
@@ -377,7 +379,7 @@ function normalizeAttachmentMetadata(raw) {
     .filter(Boolean);
 }
 
-async function saveAttachmentMetadataRecords({ jobId, attachments, actorId }) {
+async function saveAttachmentMetadataRecords({ jobId, attachments, actorId, defaultRemark }) {
   if (!jobId || !Array.isArray(attachments) || !attachments.length) return [];
   const created = [];
   for (const att of attachments) {
@@ -393,7 +395,9 @@ async function saveAttachmentMetadataRecords({ jobId, attachments, actorId }) {
       remark:
         typeof att.remark === "string" && att.remark.trim()
           ? att.remark.trim()
-          : null,
+          : typeof defaultRemark === "string" && defaultRemark.trim()
+            ? defaultRemark.trim()
+            : null,
     };
     const row = await JobAttachment.create(payload);
     created.push(row);
@@ -956,11 +960,16 @@ jobRouter.post(
 
       const actorId = req.user?.sub || req.user?.user_id || null;
       const keyPrefix = process.env.S3_KEY_PREFIX_JOB_ATTACHMENTS || "uploads/jobs/attachments/";
+      const defaultRemark =
+        typeof req.body.remark === "string" && req.body.remark.trim()
+          ? req.body.remark.trim()
+          : null;
       const created = await saveJobAttachments({
         jobId: job.job_id,
         files,
         actorId,
         keyPrefix,
+        defaultRemark,
       });
 
       res.status(201).json(created);
@@ -1488,10 +1497,10 @@ jobRouter.put(
         }
       }
 
-      const attachmentFiles = rawFiles.filter((file) => {
-        const name = String(file?.fieldname || "").toLowerCase();
-        return /^files(\[\d*\])?$/.test(name) || /^attachments(\[\d*\])?$/.test(name);
-      });
+    const attachmentFiles = rawFiles.filter((file) => {
+      const name = String(file?.fieldname || "").toLowerCase();
+      return /^files(\[\d*\])?$/.test(name) || /^attachments(\[\d*\])?$/.test(name);
+    });
       const hasGranular = ["estimated_days", "estimated_hours", "estimated_minutes"].some(
         (k) => updates[k] !== undefined && updates[k] !== null
       );
@@ -1578,11 +1587,17 @@ jobRouter.put(
         });
       }
 
+      const jobRemark =
+        typeof req.body.remark === "string" && req.body.remark.trim()
+          ? req.body.remark.trim()
+          : null;
+
       if (attachmentFiles.length) {
         await saveJobAttachments({
           jobId: job.job_id,
           files: attachmentFiles,
           actorId,
+          defaultRemark: jobRemark,
         });
       }
       if (metadataAttachments.length) {
@@ -1590,6 +1605,7 @@ jobRouter.put(
           jobId: job.job_id,
           attachments: metadataAttachments,
           actorId,
+          defaultRemark: jobRemark,
         });
       }
 
