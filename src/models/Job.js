@@ -36,7 +36,7 @@ export default (sequelize) => {
       job_assigned: { type: DataTypes.BOOLEAN, defaultValue: false },
     },
     {
-      hooks: {}, // ✅ no beforeCreate hook
+      hooks: {},
     }
   );
 

@@ -139,6 +139,7 @@ function normalizeAttachment(att) {
     s3_key: plain.s3_key || null,
     uploaded_by: plain.uploaded_by,
     uploaded_at: plain.createdAt,
+    remark: plain.remark || null,
     uploader: plain.uploader
       ? {
           user_id: plain.uploader.user_id,
@@ -285,6 +286,10 @@ async function saveJobAttachments({ jobId, files, actorId, keyPrefix }) {
   const created = [];
   for (const file of items) {
     const { buffer, mimetype, originalname, size } = file;
+    const remark =
+      typeof file?.remark === "string" && file.remark.trim()
+        ? file.remark.trim()
+        : null;
     const result = await uploadBufferToS3({
       buffer,
       contentType: mimetype,
@@ -299,6 +304,7 @@ async function saveJobAttachments({ jobId, files, actorId, keyPrefix }) {
       url: result.url,
       s3_key: result.key,
       uploaded_by: actorId || null,
+      remark,
     });
     await attachment.reload({
       include: [{ model: User, as: "uploader", attributes: ["user_id", "name", "photo"] }],
@@ -362,6 +368,10 @@ function normalizeAttachmentMetadata(raw) {
         file_name: deriveName(),
         content_type: contentType,
         file_size: fileSize,
+        remark:
+          typeof item.remark === "string" && item.remark.trim()
+            ? item.remark.trim()
+            : null,
       };
     })
     .filter(Boolean);
@@ -380,6 +390,10 @@ async function saveAttachmentMetadataRecords({ jobId, attachments, actorId }) {
       content_type: att.content_type || null,
       file_size: att.file_size ?? null,
       uploaded_by: actorId || null,
+      remark:
+        typeof att.remark === "string" && att.remark.trim()
+          ? att.remark.trim()
+          : null,
     };
     const row = await JobAttachment.create(payload);
     created.push(row);

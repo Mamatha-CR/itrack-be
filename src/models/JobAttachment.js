@@ -33,6 +33,10 @@ export default (sequelize) =>
       uploaded_by: {
         type: DataTypes.UUID,
       },
+      remark: {
+        type: DataTypes.TEXT,
+        allowNull: true,
+      },
     },
     {
       indexes: [{ fields: ["job_id"] }],

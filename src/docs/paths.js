@@ -2116,6 +2116,7 @@
  *                       s3_key: { type: string, nullable: true }
  *                       uploaded_by: { type: string, format: uuid, nullable: true }
  *                       uploaded_at: { type: string, format: date-time }
+ *                       remark: { type: string, nullable: true }
  *                       uploader:
  *                         type: object
  *                         nullable: true
@@ -2205,6 +2206,7 @@
  *                   s3_key: { type: string, nullable: true }
  *                   uploaded_by: { type: string, format: uuid, nullable: true }
  *                   uploaded_at: { type: string, format: date-time }
+ *                   remark: { type: string, nullable: true }
  *                   uploader:
  *                     type: object
  *                     nullable: true
@@ -2215,7 +2217,9 @@
  *   post:
  *     tags: [Jobs]
  *     summary: Upload attachments for a job
- *     description: Accepts up to JOB_ATTACHMENT_MAX_FILES files (default 5).
+ *     description: >
+ *       Accepts up to 3 files per request. Each file must be 10 MB or smaller (values controlled by the
+ *       JOB_ATTACHMENT_MAX_FILES and JOB_ATTACHMENT_MAX_BYTES environment variables).
  *     security: [ { bearerAuth: [] } ]
  *     parameters:
  *       - in: path
@@ -2235,8 +2239,8 @@
  *             properties:
  *               files:
  *                 type: array
+ *                 description: One or more files to attach (max 3, 10 MB each)
  *                 items: { type: string, format: binary }
- *                 description: One or more files to attach
  *     responses:
  *       201:
  *         description: Created
@@ -2255,6 +2259,7 @@
  *                   s3_key: { type: string, nullable: true }
  *                   uploaded_by: { type: string, format: uuid, nullable: true }
  *                   uploaded_at: { type: string, format: date-time }
+ *                   remark: { type: string, nullable: true }
  *                   uploader:
  *                     type: object
  *                     nullable: true
