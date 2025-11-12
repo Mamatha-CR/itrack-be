@@ -955,16 +955,11 @@ jobRouter.post(
 
       const actorId = req.user?.sub || req.user?.user_id || null;
       const keyPrefix = process.env.S3_KEY_PREFIX_JOB_ATTACHMENTS || "uploads/jobs/attachments/";
-      const defaultRemark =
-        typeof req.body.remark === "string" && req.body.remark.trim()
-          ? req.body.remark.trim()
-          : null;
       const created = await saveJobAttachments({
         jobId: job.job_id,
         files,
         actorId,
         keyPrefix,
-        defaultRemark,
       });
 
       res.status(201).json(created);
@@ -1610,13 +1605,17 @@ jobRouter.put(
         });
       }
 
+      const jobRemark =
+        typeof req.body.remark === "string" && req.body.remark.trim()
+          ? req.body.remark.trim()
+          : null;
+
       if (attachmentFiles.length) {
         await saveJobAttachments({
           jobId: job.job_id,
           files: attachmentFiles,
           actorId,
-          defaultRemark: remark,
-          remark,
+          defaultRemark: jobRemark,
         });
       }
       if (metadataAttachments.length) {
@@ -1624,8 +1623,7 @@ jobRouter.put(
           jobId: job.job_id,
           attachments: metadataAttachments,
           actorId,
-          defaultRemark: remark,
-          remark,
+          defaultRemark: jobRemark,
         });
       }
 
