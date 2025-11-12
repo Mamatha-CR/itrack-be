@@ -1616,6 +1616,7 @@ jobRouter.put(
           files: attachmentFiles,
           actorId,
           defaultRemark: remark,
+          remark,
         });
       }
       if (metadataAttachments.length) {
@@ -1624,6 +1625,7 @@ jobRouter.put(
           attachments: metadataAttachments,
           actorId,
           defaultRemark: remark,
+          remark,
         });
       }
 
