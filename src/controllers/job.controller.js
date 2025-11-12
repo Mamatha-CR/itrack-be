@@ -1228,6 +1228,7 @@ jobRouter.get("/:id", rbac("Manage Job", "view"), applyOrgScope, async (req, res
             "s3_key",
             "uploaded_by",
             "createdAt",
+            "remark",
           ],
           include: [{ model: User, as: "uploader", attributes: ["user_id", "name", "photo"] }],
         },
