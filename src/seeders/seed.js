@@ -1,4 +1,3 @@
-// src/seed/seed.js
 import dotenv from "dotenv";
 dotenv.config();
 

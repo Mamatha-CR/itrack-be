@@ -1,4 +1,3 @@
-// src/routes/location.routes.js
 import express from "express";
 import { Country, State, District, Pincode, Region } from "../models/index.js";
 import { buildCrudRoutes } from "../utils/crudFactory.js";

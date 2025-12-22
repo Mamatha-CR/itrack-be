@@ -1,4 +1,3 @@
-// src/routes/filters.js
 import { Op } from "sequelize";
 
 // escape % and _ for LIKE/iLIKE

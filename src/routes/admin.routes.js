@@ -1,4 +1,3 @@
-// src/routes/admin.routes.js
 import express from "express";
 import multer from "multer";
 import { rbac } from "../middleware/rbac.js";
@@ -75,9 +74,8 @@ function toOptDate(v) {
 function toOptUuid(v) {
   if (isBlank(v)) return undefined;
   const s = String(v).trim();
-  // Treat literal 'null'/'undefined' as unset
   if (["null", "undefined"].includes(s.toLowerCase())) return undefined;
-  return s; // allow Sequelize to validate UUID format
+  return s;
 }
 
 async function attachUserUploads(

@@ -1,4 +1,3 @@
-// src/routes/buildCrudRoutes.js
 import express from "express";
 import multer from "multer";
 import { buildWhere } from "./filters.js";

@@ -1,4 +1,3 @@
-// src/routes/job.routes.js
 import express from "express";
 import multer from "multer";
 import { rbac } from "../middleware/rbac.js";

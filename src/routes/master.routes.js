@@ -1,4 +1,3 @@
-// src/routes/master.routes.js
 import express from "express";
 import {
   NatureOfWork,

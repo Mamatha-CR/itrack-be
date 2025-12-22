@@ -143,7 +143,7 @@ const buildAuthResponse = async (principal, type) => {
       role: { id: role?.role_id, name: role?.role_name, slug: role?.role_slug },
       company_id,
       company_theme_color: company?.theme_color ?? null,
-      profile, // <-- display names are now mixed into profile
+      profile,
     },
     permissions,
   };
