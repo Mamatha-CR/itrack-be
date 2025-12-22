@@ -1978,6 +1978,7 @@
  *       - reference_number is auto-generated if omitted.
  *       - Accepts estimated duration as days/hours/minutes. Backend also stores total minutes in estimated_duration.
  *       - A JobStatusHistory row is created if job_status_id is provided.
+ *       - Optional job_photo image uploads use multipart/form-data; sending an empty value (or the remove flag) clears the stored photo.
  *     security:
  *       - bearerAuth: []
  *     requestBody:
@@ -2002,6 +2003,32 @@
  *               scheduledDateAndTime: { type: string, format: date-time }
  *               reference_number: { type: string }
  *               job_description: { type: string }
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             required: [client_id, supervisor_id, technician_id]
+ *             properties:
+ *               client_id: { type: string, format: uuid }
+ *               worktype_id: { type: string, format: uuid }
+ *               jobtype_id: { type: string, format: uuid }
+ *               supervisor_id: { type: string, format: uuid }
+ *               technician_id: { type: string, format: uuid }
+ *               now_id: { type: string, format: uuid }
+ *               job_status_id: { type: string, format: uuid }
+ *               estimated_days: { type: integer, minimum: 0 }
+ *               estimated_hours: { type: integer, minimum: 0, maximum: 23 }
+ *               estimated_minutes: { type: integer, minimum: 0, maximum: 59 }
+ *               estimated_duration: { type: integer, description: Total minutes (optional; computed if days/hours/minutes provided) }
+ *               scheduledDateAndTime: { type: string, format: date-time }
+ *               reference_number: { type: string }
+ *               job_description: { type: string }
+ *               job_photo:
+ *                 type: string
+ *                 format: binary
+ *                 description: Image (jpeg/png/webp/etc.) stored on S3 for the job card
+ *               remove_job_photo:
+ *                 type: string
+ *                 description: Optional flag ("true"/"1"/"remove") to clear a previously stored photo
  *           examples:
  *             basic:
  *               value:
@@ -2089,6 +2116,7 @@
  *                       s3_key: { type: string, nullable: true }
  *                       uploaded_by: { type: string, format: uuid, nullable: true }
  *                       uploaded_at: { type: string, format: date-time }
+ *                       remark: { type: string, nullable: true }
  *                       uploader:
  *                         type: object
  *                         nullable: true
@@ -2099,7 +2127,9 @@
  *   put:
  *     tags: [Jobs]
  *     summary: Update job (tracks status changes)
- *     description: If job_status_id changes, a new JobStatusHistory row is created.
+ *     description: >
+ *       - If job_status_id changes, a new JobStatusHistory row is created.
+ *       - Supports multipart/form-data uploads for job_photo (image) and remove_job_photo flag to clear it.
  *     security: [ { bearerAuth: [] } ]
  *     parameters:
  *       - in: path
@@ -2114,7 +2144,19 @@
  *       required: true
  *       content:
  *         application/json:
- *           schema: { type: object }
+ *           schema:
+ *             type: object
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               job_photo:
+ *                 type: string
+ *                 format: binary
+ *                 description: Image (jpeg/png/webp/etc.) stored on S3 for the job
+ *               remove_job_photo:
+ *                 type: string
+ *                 description: Optional flag ("true"/"1"/"remove") to clear the existing image
  *     responses:
  *       200: { description: OK }
  *   delete:
@@ -2164,6 +2206,7 @@
  *                   s3_key: { type: string, nullable: true }
  *                   uploaded_by: { type: string, format: uuid, nullable: true }
  *                   uploaded_at: { type: string, format: date-time }
+ *                   remark: { type: string, nullable: true }
  *                   uploader:
  *                     type: object
  *                     nullable: true
@@ -2174,7 +2217,9 @@
  *   post:
  *     tags: [Jobs]
  *     summary: Upload attachments for a job
- *     description: Accepts up to JOB_ATTACHMENT_MAX_FILES files (default 5).
+ *     description: >
+ *       Accepts up to 3 files per request. Each file must be 10 MB or smaller (values controlled by the
+ *       JOB_ATTACHMENT_MAX_FILES and JOB_ATTACHMENT_MAX_BYTES environment variables).
  *     security: [ { bearerAuth: [] } ]
  *     parameters:
  *       - in: path
@@ -2194,8 +2239,8 @@
  *             properties:
  *               files:
  *                 type: array
+ *                 description: One or more files to attach (max 3, 10 MB each)
  *                 items: { type: string, format: binary }
- *                 description: One or more files to attach
  *     responses:
  *       201:
  *         description: Created
@@ -2214,6 +2259,7 @@
  *                   s3_key: { type: string, nullable: true }
  *                   uploaded_by: { type: string, format: uuid, nullable: true }
  *                   uploaded_at: { type: string, format: date-time }
+ *                   remark: { type: string, nullable: true }
  *                   uploader:
  *                     type: object
  *                     nullable: true

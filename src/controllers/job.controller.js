@@ -45,6 +45,7 @@ async function getJobColumnAvailability() {
     estimated_days: !!desc.estimated_days,
     estimated_hours: !!desc.estimated_hours,
     estimated_minutes: !!desc.estimated_minutes,
+    job_photo: !!desc.job_photo,
   };
 }
 async function getJobAttributesList() {
@@ -101,11 +102,7 @@ function normalizeChatPayload(chat) {
       : vendor
         ? "vendor"
         : "user";
-  const displayName =
-    plain.author?.name ||
-    vendor?.vendor_name ||
-    company?.name ||
-    null;
+  const displayName = plain.author?.name || vendor?.vendor_name || company?.name || null;
   return {
     id: plain.id,
     actor_type: actorType,
@@ -117,7 +114,11 @@ function normalizeChatPayload(chat) {
     user_photo: plain.author?.photo || null,
     company_theme_color: company?.theme_color || null,
     company: company
-      ? { company_id: company.company_id, name: company.name, theme_color: company.theme_color || null }
+      ? {
+          company_id: company.company_id,
+          name: company.name,
+          theme_color: company.theme_color || null,
+        }
       : null,
     vendor: vendor ? { vendor_id: vendor.vendor_id, name: vendor.vendor_name } : null,
     message: plain.message,
@@ -137,6 +138,7 @@ function normalizeAttachment(att) {
     s3_key: plain.s3_key || null,
     uploaded_by: plain.uploaded_by,
     uploaded_at: plain.createdAt,
+    remark: plain.remark || null,
     uploader: plain.uploader
       ? {
           user_id: plain.uploader.user_id,
@@ -180,7 +182,97 @@ const attachmentUpload = multer({
   },
 });
 
-async function saveJobAttachments({ jobId, files, actorId, keyPrefix }) {
+const JOB_PHOTO_FIELD_NAMES = ["job_photo", "jobphoto", "jobPhoto"];
+const JOB_PHOTO_REMOVE_KEYS = [
+  "remove_job_photo",
+  "job_photo_remove",
+  "job_photo_clear",
+  "jobPhotoRemove",
+  "jobPhotoClear",
+];
+const JOB_PHOTO_ALLOWED_MIME = /^image\//i;
+
+const JOB_PHOTO_REMOVE_VALUES = new Set(["1", "true", "yes", "y", "remove", "clear"]);
+
+function getJobPhotoKeyPrefix() {
+  return process.env.S3_KEY_PREFIX_JOB_PHOTO || "uploads/jobs/photo/";
+}
+
+function findJobPhotoFile(files) {
+  if (!Array.isArray(files) || !files.length) return null;
+  return (
+    files.find((file) => {
+      const field = String(file?.fieldname || "").toLowerCase();
+      return JOB_PHOTO_FIELD_NAMES.includes(field);
+    }) || null
+  );
+}
+
+function coerceTruthyFlag(value) {
+  if (value === true) return true;
+  if (value === false || value == null) return false;
+  if (typeof value === "number") return value === 1;
+  const normalized = String(value).trim().toLowerCase();
+  return JOB_PHOTO_REMOVE_VALUES.has(normalized);
+}
+
+function consumeJobPhotoRemovalFlag(target = {}) {
+  let shouldRemove = false;
+  for (const key of JOB_PHOTO_REMOVE_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(target, key)) {
+      if (coerceTruthyFlag(target[key])) shouldRemove = true;
+      delete target[key];
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(target, "job_photo")) {
+    const value = target.job_photo;
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      if (!trimmed) {
+        delete target.job_photo;
+        shouldRemove = true;
+      } else {
+        target.job_photo = trimmed;
+      }
+    } else if (value == null) {
+      delete target.job_photo;
+      shouldRemove = true;
+    }
+  }
+  return shouldRemove;
+}
+
+async function applyJobPhotoMutation({ files, target, allowPersistPhoto }) {
+  if (!target) return;
+  const shouldRemove = consumeJobPhotoRemovalFlag(target);
+  if (!allowPersistPhoto) {
+    delete target.job_photo;
+    return;
+  }
+  const file = findJobPhotoFile(files);
+  if (file) {
+    if (!JOB_PHOTO_ALLOWED_MIME.test(file.mimetype || "")) {
+      const err = new Error("Job photo must be an image file");
+      err.status = 400;
+      throw err;
+    }
+    const upload = await uploadBufferToS3({
+      buffer: file.buffer,
+      filename: file.originalname,
+      contentType: file.mimetype,
+      keyPrefix: getJobPhotoKeyPrefix(),
+    });
+    target.job_photo = upload.url;
+    return;
+  }
+  if (shouldRemove) {
+    target.job_photo = null;
+  } else if (target.job_photo === undefined) {
+    delete target.job_photo;
+  }
+}
+
+async function saveJobAttachments({ jobId, files, actorId, keyPrefix, defaultRemark }) {
   const items = Array.isArray(files) ? files.filter((f) => f && f.buffer) : [];
   if (!items.length) return [];
   if (items.length > MAX_JOB_ATTACHMENT_FILES) {
@@ -193,6 +285,12 @@ async function saveJobAttachments({ jobId, files, actorId, keyPrefix }) {
   const created = [];
   for (const file of items) {
     const { buffer, mimetype, originalname, size } = file;
+    const remark =
+      typeof file?.remark === "string" && file.remark.trim()
+        ? file.remark.trim()
+        : typeof defaultRemark === "string" && defaultRemark.trim()
+          ? defaultRemark.trim()
+          : null;
     const result = await uploadBufferToS3({
       buffer,
       contentType: mimetype,
@@ -207,6 +305,7 @@ async function saveJobAttachments({ jobId, files, actorId, keyPrefix }) {
       url: result.url,
       s3_key: result.key,
       uploaded_by: actorId || null,
+      remark,
     });
     await attachment.reload({
       include: [{ model: User, as: "uploader", attributes: ["user_id", "name", "photo"] }],
@@ -270,12 +369,13 @@ function normalizeAttachmentMetadata(raw) {
         file_name: deriveName(),
         content_type: contentType,
         file_size: fileSize,
+        remark: typeof item.remark === "string" && item.remark.trim() ? item.remark.trim() : null,
       };
     })
     .filter(Boolean);
 }
 
-async function saveAttachmentMetadataRecords({ jobId, attachments, actorId }) {
+async function saveAttachmentMetadataRecords({ jobId, attachments, actorId, defaultRemark }) {
   if (!jobId || !Array.isArray(attachments) || !attachments.length) return [];
   const created = [];
   for (const att of attachments) {
@@ -288,6 +388,12 @@ async function saveAttachmentMetadataRecords({ jobId, attachments, actorId }) {
       content_type: att.content_type || null,
       file_size: att.file_size ?? null,
       uploaded_by: actorId || null,
+      remark:
+        typeof att.remark === "string" && att.remark.trim()
+          ? att.remark.trim()
+          : typeof defaultRemark === "string" && defaultRemark.trim()
+            ? defaultRemark.trim()
+            : null,
     };
     const row = await JobAttachment.create(payload);
     created.push(row);
@@ -620,176 +726,188 @@ jobRouter.get("/summary", rbac("Manage Job", "view"), applyOrgScope, async (req,
  * POST /jobs
  * - Org scoping: non-super_admin company_id is forced from token.
  * - reference_number auto-generated if absent.
+ * - Supports optional job_photo upload (multipart).
  * - Creates a JobStatusHistory entry when an initial job_status_id is provided.
  */
-jobRouter.post("/", rbac("Manage Job", "add"), applyOrgScope, async (req, res, next) => {
-  try {
-    const body = { ...req.body };
+jobRouter.post(
+  "/",
+  rbac("Manage Job", "add"),
+  applyOrgScope,
+  attachmentUpload.any(),
+  async (req, res, next) => {
+    try {
+      const body = { ...req.body };
+      const files = Array.isArray(req.files) ? req.files : [];
+      const columnAvailability = await getJobColumnAvailability();
+      await applyJobPhotoMutation({
+        files,
+        target: body,
+        allowPersistPhoto: columnAvailability.job_photo,
+      });
 
-    if (req.user?.role_slug !== "super_admin") body.company_id = req.user.company_id;
-    const companyId = body.company_id;
+      if (req.user?.role_slug !== "super_admin") body.company_id = req.user.company_id;
+      const companyId = body.company_id;
 
-    // Require assignment to a technician and supervisor on create
-    if (!body.technician_id) {
-      const err = new Error("technician_id is required to create a job");
-      err.status = 400;
-      throw err;
-    }
-    if (!body.supervisor_id) {
-      const err = new Error("supervisor_id is required to create a job");
-      err.status = 400;
-      throw err;
-    }
-
-    // Validate technician exists in same company and has technician role
-    const technician = await User.findOne({
-      where: { user_id: body.technician_id, company_id: companyId },
-    });
-    if (!technician) {
-      const err = new Error("technician_id does not exist or is not in the same company");
-      err.status = 400;
-      throw err;
-    }
-    if (technician.role_id) {
-      const tRole = await Role.findOne({ where: { role_id: technician.role_id } });
-      if (!tRole || String(tRole.role_slug || "").toLowerCase() !== "technician") {
-        const err = new Error("technician_id must belong to a user with technician role");
+      // Require assignment to a technician and supervisor on create
+      if (!body.technician_id) {
+        const err = new Error("technician_id is required to create a job");
         err.status = 400;
         throw err;
       }
-    }
-
-    // Validate supervisor exists in same company and has supervisor role
-    const supervisor = await User.findOne({
-      where: { user_id: body.supervisor_id, company_id: companyId },
-    });
-    if (!supervisor) {
-      const err = new Error("supervisor_id does not exist or is not in the same company");
-      err.status = 400;
-      throw err;
-    }
-    if (supervisor.role_id) {
-      const sRole = await Role.findOne({ where: { role_id: supervisor.role_id } });
-      if (!sRole || String(sRole.role_slug || "").toLowerCase() !== "supervisor") {
-        const err = new Error("supervisor_id must belong to a user with supervisor role");
+      if (!body.supervisor_id) {
+        const err = new Error("supervisor_id is required to create a job");
         err.status = 400;
         throw err;
       }
-    }
 
-    if (!body.reference_number) {
-      // Keep human-friendly reference_number but ensure short numeric ID is also generated by model hook
-      body.reference_number = `JOB-${Date.now()}-${Math.random()
-        .toString(36)
-        .slice(2, 8)
-        .toUpperCase()}`;
-    }
+      // Validate technician exists in same company and has technician role
+      const technician = await User.findOne({
+        where: { user_id: body.technician_id, company_id: companyId },
+      });
+      if (!technician) {
+        const err = new Error("technician_id does not exist or is not in the same company");
+        err.status = 400;
+        throw err;
+      }
+      if (technician.role_id) {
+        const tRole = await Role.findOne({ where: { role_id: technician.role_id } });
+        if (!tRole || String(tRole.role_slug || "").toLowerCase() !== "technician") {
+          const err = new Error("technician_id must belong to a user with technician role");
+          err.status = 400;
+          throw err;
+        }
+      }
 
-    // Default initial job status to "Not Started" if not provided
-    if (!body.job_status_id) {
-      try {
-        const notStarted = await JobStatus.findOne({
-          where: {
-            status: true,
-            [Op.and]: [
-              Sequelize.where(
-                Sequelize.fn("LOWER", Sequelize.col("job_status_title")),
-                "not started"
-              ),
-            ],
-          },
+      // Validate supervisor exists in same company and has supervisor role
+      const supervisor = await User.findOne({
+        where: { user_id: body.supervisor_id, company_id: companyId },
+      });
+      if (!supervisor) {
+        const err = new Error("supervisor_id does not exist or is not in the same company");
+        err.status = 400;
+        throw err;
+      }
+      if (supervisor.role_id) {
+        const sRole = await Role.findOne({ where: { role_id: supervisor.role_id } });
+        if (!sRole || String(sRole.role_slug || "").toLowerCase() !== "supervisor") {
+          const err = new Error("supervisor_id must belong to a user with supervisor role");
+          err.status = 400;
+          throw err;
+        }
+      }
+
+      if (!body.reference_number) {
+        // Keep human-friendly reference_number but ensure short numeric ID is also generated by model hook
+        body.reference_number = `JOB-${Date.now()}-${Math.random()
+          .toString(36)
+          .slice(2, 8)
+          .toUpperCase()}`;
+      }
+
+      // Default initial job status to "Not Started" if not provided
+      if (!body.job_status_id) {
+        try {
+          const notStarted = await JobStatus.findOne({
+            where: {
+              status: true,
+              [Op.and]: [
+                Sequelize.where(
+                  Sequelize.fn("LOWER", Sequelize.col("job_status_title")),
+                  "not started"
+                ),
+              ],
+            },
+          });
+          if (notStarted) body.job_status_id = notStarted.job_status_id;
+        } catch {
+          /* ignore defaulting errors */
+        }
+      }
+
+      // Normalize estimated duration: accept either (days/hours/minutes) or total minutes
+      const hasGranular = ["estimated_days", "estimated_hours", "estimated_minutes"].some(
+        (k) => body[k] !== undefined && body[k] !== null
+      );
+
+      if (hasGranular) {
+        const d = Number.isFinite(Number(body.estimated_days)) ? Number(body.estimated_days) : 0;
+        const h = Number.isFinite(Number(body.estimated_hours)) ? Number(body.estimated_hours) : 0;
+        const m = Number.isFinite(Number(body.estimated_minutes))
+          ? Number(body.estimated_minutes)
+          : 0;
+
+        if (
+          d < 0 ||
+          h < 0 ||
+          m < 0 ||
+          !Number.isInteger(d) ||
+          !Number.isInteger(h) ||
+          !Number.isInteger(m)
+        ) {
+          const err = new Error("estimated_days/hours/minutes must be non-negative integers");
+          err.status = 400;
+          throw err;
+        }
+        if (h > 23 || m > 59) {
+          const err = new Error("estimated_hours must be 0-23 and estimated_minutes 0-59");
+          err.status = 400;
+          throw err;
+        }
+        body.estimated_days = d;
+        body.estimated_hours = h;
+        body.estimated_minutes = m;
+        body.estimated_duration = d * 24 * 60 + h * 60 + m;
+      } else if (body.estimated_duration !== undefined && body.estimated_duration !== null) {
+        const total = Number(body.estimated_duration);
+        if (!Number.isFinite(total) || total < 0) {
+          const err = new Error("estimated_duration must be a non-negative number of minutes");
+          err.status = 400;
+          throw err;
+        }
+        const d = Math.floor(total / (24 * 60));
+        const h = Math.floor((total % (24 * 60)) / 60);
+        const m = Math.floor(total % 60);
+        body.estimated_days = d;
+        body.estimated_hours = h;
+        body.estimated_minutes = m;
+        body.estimated_duration = Math.floor(total);
+      }
+
+      // Drop granular fields if DB columns are not available yet
+      if (!columnAvailability.estimated_days) delete body.estimated_days;
+      if (!columnAvailability.estimated_hours) delete body.estimated_hours;
+      if (!columnAvailability.estimated_minutes) delete body.estimated_minutes;
+      if (!columnAvailability.job_photo) delete body.job_photo;
+
+      const created = await Job.create(body, { returning: false });
+
+      // Reload with only existing columns to avoid undefined-column errors
+      const jobAttrs = await getJobAttributesList();
+      const createdFresh = await Job.findOne({
+        where: { job_id: created.job_id },
+        attributes: jobAttrs,
+      });
+
+      if (created.job_status_id) {
+        const statusRow = await JobStatus.findOne({
+          where: { job_status_id: created.job_status_id },
         });
-        if (notStarted) body.job_status_id = notStarted.job_status_id;
-      } catch {
-        /* ignore defaulting errors */
+        const rawRemark = body.remark ?? body.remarks ?? body.status_remark ?? body.note ?? null;
+        const remark = typeof rawRemark === "string" && rawRemark.trim() ? rawRemark.trim() : null;
+        await JobStatusHistory.create({
+          job_id: created.job_id,
+          job_status_id: created.job_status_id,
+          is_completed: normalizeStatusKey(statusRow?.job_status_title) === "completed",
+          remarks: remark,
+        });
       }
+
+      res.status(201).json(createdFresh || created);
+    } catch (e) {
+      next(e);
     }
-
-    // Normalize estimated duration: accept either (days/hours/minutes) or total minutes
-    const hasGranular = ["estimated_days", "estimated_hours", "estimated_minutes"].some(
-      (k) => body[k] !== undefined && body[k] !== null
-    );
-
-    if (hasGranular) {
-      const d = Number.isFinite(Number(body.estimated_days)) ? Number(body.estimated_days) : 0;
-      const h = Number.isFinite(Number(body.estimated_hours)) ? Number(body.estimated_hours) : 0;
-      const m = Number.isFinite(Number(body.estimated_minutes))
-        ? Number(body.estimated_minutes)
-        : 0;
-
-      if (
-        d < 0 ||
-        h < 0 ||
-        m < 0 ||
-        !Number.isInteger(d) ||
-        !Number.isInteger(h) ||
-        !Number.isInteger(m)
-      ) {
-        const err = new Error("estimated_days/hours/minutes must be non-negative integers");
-        err.status = 400;
-        throw err;
-      }
-      if (h > 23 || m > 59) {
-        const err = new Error("estimated_hours must be 0-23 and estimated_minutes 0-59");
-        err.status = 400;
-        throw err;
-      }
-      body.estimated_days = d;
-      body.estimated_hours = h;
-      body.estimated_minutes = m;
-      body.estimated_duration = d * 24 * 60 + h * 60 + m;
-    } else if (body.estimated_duration !== undefined && body.estimated_duration !== null) {
-      const total = Number(body.estimated_duration);
-      if (!Number.isFinite(total) || total < 0) {
-        const err = new Error("estimated_duration must be a non-negative number of minutes");
-        err.status = 400;
-        throw err;
-      }
-      const d = Math.floor(total / (24 * 60));
-      const h = Math.floor((total % (24 * 60)) / 60);
-      const m = Math.floor(total % 60);
-      body.estimated_days = d;
-      body.estimated_hours = h;
-      body.estimated_minutes = m;
-      body.estimated_duration = Math.floor(total);
-    }
-
-    // Drop granular fields if DB columns are not available yet
-    const avail = await getJobColumnAvailability();
-    if (!avail.estimated_days) delete body.estimated_days;
-    if (!avail.estimated_hours) delete body.estimated_hours;
-    if (!avail.estimated_minutes) delete body.estimated_minutes;
-
-    const created = await Job.create(body, { returning: false });
-
-    // Reload with only existing columns to avoid undefined-column errors
-    const jobAttrs = await getJobAttributesList();
-    const createdFresh = await Job.findOne({
-      where: { job_id: created.job_id },
-      attributes: jobAttrs,
-    });
-
-    if (created.job_status_id) {
-      const statusRow = await JobStatus.findOne({
-        where: { job_status_id: created.job_status_id },
-      });
-      const rawRemark =
-        body.remark ?? body.remarks ?? body.status_remark ?? body.note ?? null;
-      const remark =
-        typeof rawRemark === "string" && rawRemark.trim() ? rawRemark.trim() : null;
-      await JobStatusHistory.create({
-        job_id: created.job_id,
-        job_status_id: created.job_status_id,
-        is_completed: normalizeStatusKey(statusRow?.job_status_title) === "completed",
-        remarks: remark,
-      });
-    }
-
-    res.status(201).json(createdFresh || created);
-  } catch (e) {
-    next(e);
   }
-});
+);
 
 jobRouter.get(
   "/:id/attachments",
@@ -909,7 +1027,16 @@ jobRouter.get("/:id/chats", rbac("Manage Job", "view"), applyOrgScope, async (re
     const messages = await JobChat.findAll({
       where: { job_id: job.job_id },
       order: [["createdAt", "ASC"]],
-      attributes: ["id", "job_id", "user_id", "vendor_id", "company_id", "author_type", "message", "createdAt"],
+      attributes: [
+        "id",
+        "job_id",
+        "user_id",
+        "vendor_id",
+        "company_id",
+        "author_type",
+        "message",
+        "createdAt",
+      ],
       include: [
         { model: User, as: "author", attributes: ["user_id", "name", "photo"] },
         { model: Vendor, as: "vendor_author", attributes: ["vendor_id", "vendor_name"] },
@@ -949,7 +1076,9 @@ jobRouter.post("/:id/chats", rbac("Manage Job", "view"), applyOrgScope, async (r
     if (!message) return res.status(400).json({ message: "Message is required" });
     if (message.length > 2000) return res.status(400).json({ message: "Message too long" });
 
-    const accountType = String(req.user?.type || roleSlug || "").trim().toLowerCase();
+    const accountType = String(req.user?.type || roleSlug || "")
+      .trim()
+      .toLowerCase();
     const chatData = {
       job_id: job.job_id,
       message,
@@ -975,7 +1104,16 @@ jobRouter.post("/:id/chats", rbac("Manage Job", "view"), applyOrgScope, async (r
 
     const created = await JobChat.create(chatData);
     await created.reload({
-      attributes: ["id", "job_id", "user_id", "vendor_id", "company_id", "author_type", "message", "createdAt"],
+      attributes: [
+        "id",
+        "job_id",
+        "user_id",
+        "vendor_id",
+        "company_id",
+        "author_type",
+        "message",
+        "createdAt",
+      ],
       include: [
         { model: User, as: "author", attributes: ["user_id", "name", "photo"] },
         { model: Vendor, as: "vendor_author", attributes: ["vendor_id", "vendor_name"] },
@@ -1003,62 +1141,75 @@ jobRouter.get("/:id", rbac("Manage Job", "view"), applyOrgScope, async (req, res
     const job = await Job.findOne({
       where: { ...(req.scopeWhere || {}), ...idClause },
       attributes: jobAttrs,
-        include: [
-          {
-            model: Client,
-            as: "client",
-            include: [
-              { model: State, as: "state", attributes: ["state_id", "state_name"], required: false },
-              {
-                model: Country,
-                as: "country",
-                attributes: ["country_id", "country_name"],
-                required: false,
-              },
-            ],
-          },
-          {
-            model: User,
-            as: "technician",
-            attributes: { exclude: ["password"] },
-            include: [
-              { model: State, as: "state", attributes: ["state_id", "state_name"], required: false },
-              {
-                model: Country,
-                as: "country",
-                attributes: ["country_id", "country_name"],
-                required: false,
-              },
-            ],
-          },
-          {
-            model: User,
-            as: "supervisor",
-            attributes: { exclude: ["password"] },
-            include: [
-              { model: State, as: "state", attributes: ["state_id", "state_name"], required: false },
-              {
-                model: Country,
-                as: "country",
-                attributes: ["country_id", "country_name"],
-                required: false,
-              },
-            ],
-          },
-          { model: WorkType, as: "work_type" },
-          { model: JobType, as: "job_type" },
-          { model: NatureOfWork, as: "nature_of_work" },
+      include: [
+        {
+          model: Client,
+          as: "client",
+          include: [
+            { model: State, as: "state", attributes: ["state_id", "state_name"], required: false },
+            {
+              model: Country,
+              as: "country",
+              attributes: ["country_id", "country_name"],
+              required: false,
+            },
+          ],
+        },
+        {
+          model: User,
+          as: "technician",
+          attributes: { exclude: ["password"] },
+          include: [
+            { model: State, as: "state", attributes: ["state_id", "state_name"], required: false },
+            {
+              model: Country,
+              as: "country",
+              attributes: ["country_id", "country_name"],
+              required: false,
+            },
+          ],
+        },
+        {
+          model: User,
+          as: "supervisor",
+          attributes: { exclude: ["password"] },
+          include: [
+            { model: State, as: "state", attributes: ["state_id", "state_name"], required: false },
+            {
+              model: Country,
+              as: "country",
+              attributes: ["country_id", "country_name"],
+              required: false,
+            },
+          ],
+        },
+        { model: WorkType, as: "work_type" },
+        { model: JobType, as: "job_type" },
+        { model: NatureOfWork, as: "nature_of_work" },
         { model: JobStatus, as: "job_status" },
         {
           model: JobChat,
           as: "chats",
           separate: true,
           order: [["createdAt", "ASC"]],
-          attributes: ["id", "job_id", "user_id", "vendor_id", "company_id", "author_type", "message", "createdAt"],
+          attributes: [
+            "id",
+            "job_id",
+            "user_id",
+            "vendor_id",
+            "company_id",
+            "author_type",
+            "message",
+            "createdAt",
+          ],
           include: [
             { model: User, as: "author", attributes: ["user_id", "name", "photo"] },
             { model: Vendor, as: "vendor_author", attributes: ["vendor_id", "vendor_name"] },
-            { model: Company, as: "company_author", attributes: ["company_id", "name", "theme_color"] },
+            {
+              model: Company,
+              as: "company_author",
+              attributes: ["company_id", "name", "theme_color"],
+            },
           ],
         },
         {
@@ -1076,6 +1227,7 @@ jobRouter.get("/:id", rbac("Manage Job", "view"), applyOrgScope, async (req, res
             "s3_key",
             "uploaded_by",
             "createdAt",
+            "remark",
           ],
           include: [{ model: User, as: "uploader", attributes: ["user_id", "name", "photo"] }],
         },
@@ -1090,14 +1242,14 @@ jobRouter.get("/:id", rbac("Manage Job", "view"), applyOrgScope, async (req, res
       order: [["createdAt", "ASC"]],
     });
 
-      const jobPlain = job?.toJSON ? job.toJSON() : job;
-      ensureGranularDurationFields(jobPlain);
-      attachLocationLabels(jobPlain?.client);
-      attachLocationLabels(jobPlain?.technician);
-      attachLocationLabels(jobPlain?.supervisor);
-      const chats = Array.isArray(jobPlain.chats)
-        ? jobPlain.chats.map((chat) => normalizeChatPayload(chat)).filter(Boolean)
-        : [];
+    const jobPlain = job?.toJSON ? job.toJSON() : job;
+    ensureGranularDurationFields(jobPlain);
+    attachLocationLabels(jobPlain?.client);
+    attachLocationLabels(jobPlain?.technician);
+    attachLocationLabels(jobPlain?.supervisor);
+    const chats = Array.isArray(jobPlain.chats)
+      ? jobPlain.chats.map((chat) => normalizeChatPayload(chat)).filter(Boolean)
+      : [];
     let attachments = Array.isArray(jobPlain.attachments)
       ? jobPlain.attachments.map((att) => normalizeAttachment(att)).filter(Boolean)
       : [];
@@ -1347,9 +1499,16 @@ jobRouter.put(
       }
 
       const prevStatus = job.job_status_id;
+      const columnAvailability = await getJobColumnAvailability();
 
       // Normalize estimated duration on updates
       const updates = { ...req.body };
+      const rawFiles = Array.isArray(req.files) ? req.files : [];
+      await applyJobPhotoMutation({
+        files: rawFiles,
+        target: updates,
+        allowPersistPhoto: columnAvailability.job_photo,
+      });
       const metadataAttachments = normalizeAttachmentMetadata(
         req.body?.attachments ?? req.body?.attachment_metadata ?? null
       );
@@ -1361,7 +1520,6 @@ jobRouter.put(
         }
       }
 
-      const rawFiles = Array.isArray(req.files) ? req.files : [];
       const attachmentFiles = rawFiles.filter((file) => {
         const name = String(file?.fieldname || "").toLowerCase();
         return /^files(\[\d*\])?$/.test(name) || /^attachments(\[\d*\])?$/.test(name);
@@ -1421,10 +1579,10 @@ jobRouter.put(
       }
 
       // Drop granular fields if DB columns are not available yet
-      const avail = await getJobColumnAvailability();
-      if (!avail.estimated_days) delete updates.estimated_days;
-      if (!avail.estimated_hours) delete updates.estimated_hours;
-      if (!avail.estimated_minutes) delete updates.estimated_minutes;
+      if (!columnAvailability.estimated_days) delete updates.estimated_days;
+      if (!columnAvailability.estimated_hours) delete updates.estimated_hours;
+      if (!columnAvailability.estimated_minutes) delete updates.estimated_minutes;
+      if (!columnAvailability.job_photo) delete updates.job_photo;
 
       await job.update(updates, { returning: false });
 
@@ -1436,13 +1594,8 @@ jobRouter.put(
         });
         const statusKey = normalizeStatusKey(newStatusRow?.job_status_title);
         const rawRemark =
-          req.body.remark ??
-          req.body.remarks ??
-          req.body.status_remark ??
-          req.body.note ??
-          null;
-        const remark =
-          typeof rawRemark === "string" && rawRemark.trim() ? rawRemark.trim() : null;
+          req.body.remark ?? req.body.remarks ?? req.body.status_remark ?? req.body.note ?? null;
+        const remark = typeof rawRemark === "string" && rawRemark.trim() ? rawRemark.trim() : null;
 
         newHistoryEntry = await JobStatusHistory.create({
           job_id: job.job_id,
@@ -1452,11 +1605,17 @@ jobRouter.put(
         });
       }
 
+      const jobRemark =
+        typeof req.body.remark === "string" && req.body.remark.trim()
+          ? req.body.remark.trim()
+          : null;
+
       if (attachmentFiles.length) {
         await saveJobAttachments({
           jobId: job.job_id,
           files: attachmentFiles,
           actorId,
+          defaultRemark: jobRemark,
         });
       }
       if (metadataAttachments.length) {
@@ -1464,6 +1623,7 @@ jobRouter.put(
           jobId: job.job_id,
           attachments: metadataAttachments,
           actorId,
+          defaultRemark: jobRemark,
         });
       }
 
